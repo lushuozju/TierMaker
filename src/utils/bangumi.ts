@@ -1,0 +1,232 @@
+import type { BgmSearchResult } from '../types'
+import { loadBgmToken } from './storage'
+
+const BANGUMI_API_BASE = 'https://api.bgm.tv'
+const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
+
+// 默认 Bangumi Access Token，用于访问 NSFW 内容
+// 获取方式：https://next.bgm.tv/demo/access-token
+const DEFAULT_BGM_ACCESS_TOKEN = 'RA4MaLxFiHP5iyRGqLZsV2RCY44yAvJBgTgyXugN'
+
+/**
+ * 获取当前使用的 Access Token
+ * 优先使用用户自定义的 Token，如果没有则使用默认 Token
+ */
+function getAccessToken(): string | null {
+  // 优先使用用户自定义的 Token
+  const userToken = loadBgmToken()
+  if (userToken && userToken.trim()) {
+    return userToken.trim()
+  }
+  // 如果没有用户自定义 Token，使用默认 Token
+  return DEFAULT_BGM_ACCESS_TOKEN || null
+}
+
+export class BangumiError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'BangumiError'
+  }
+}
+
+/**
+ * 获取请求头
+ * 如果配置了 Access Token，则添加 Authorization 头以支持 NSFW 内容
+ */
+function getRequestHeaders(includeContentType = true): HeadersInit {
+  const headers: Record<string, string> = {
+    'accept': 'application/json',
+    'User-Agent': USER_AGENT,
+  }
+
+  if (includeContentType) {
+    headers['Content-Type'] = 'application/json'
+  }
+
+  // 获取 Access Token（优先用户自定义，否则使用默认）
+  const token = getAccessToken()
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`
+  }
+
+  return headers
+}
+
+/**
+ * 搜索 Bangumi 动画
+ */
+/**
+ * 带超时的 fetch 请求
+ */
+async function fetchWithTimeout(
+  url: string,
+  options: RequestInit,
+  timeout = 10000 // 10 秒超时
+): Promise<Response> {
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => {
+    console.warn(`请求超时（${timeout}ms），正在中止请求...`)
+    controller.abort()
+  }, timeout)
+
+  try {
+    console.debug('fetchWithTimeout: 开始请求', url)
+    const response = await fetch(url, {
+      ...options,
+      signal: controller.signal,
+    })
+    clearTimeout(timeoutId)
+    console.debug('fetchWithTimeout: 请求完成', response.status)
+    return response
+  } catch (error: any) {
+    clearTimeout(timeoutId)
+    console.error('fetchWithTimeout: 请求失败', error.name, error.message)
+    if (error.name === 'AbortError') {
+      throw new BangumiError(`请求超时（${timeout}ms），请检查网络连接`)
+    }
+    throw error
+  }
+}
+
+export async function searchBangumiAnime(
+  keyword: string,
+  offset = 0,
+  limit = 20
+): Promise<BgmSearchResult[]> {
+  if (!keyword.trim()) {
+    return []
+  }
+
+  try {
+    const url = `${BANGUMI_API_BASE}/v0/search/subjects`
+    const requestBody = {
+      keyword,
+      filter: { type: [1,2,3,4,5] }, // 1书籍; 2动画; 3音乐;4游戏;6三次元
+      offset,
+      limit,
+    }
+
+    const headers = getRequestHeaders()
+    console.debug('Bangumi 搜索请求:', {
+      url,
+      keyword,
+      offset,
+      limit,
+      headers,
+      body: requestBody,
+      token: getAccessToken() ? '已设置' : '未设置',
+    })
+
+    console.debug('开始发送请求...', new Date().toISOString())
+    
+    const response = await fetchWithTimeout(
+      url,
+      {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(requestBody),
+      },
+      10000 // 10 秒超时（缩短超时时间以便更快发现问题）
+    )
+
+    console.debug('收到响应:', new Date().toISOString())
+
+    console.debug('Bangumi API 响应:', {
+      status: response.status,
+      statusText: response.statusText,
+      ok: response.ok,
+      headers: Object.fromEntries(response.headers.entries()),
+    })
+
+    if (!response.ok) {
+      // 尝试读取错误响应体
+      let errorMessage = `请求失败: ${response.status} ${response.statusText}`
+      try {
+        const errorBody = await response.text()
+        console.error('Bangumi API 错误响应:', errorBody)
+        if (errorBody) {
+          try {
+            const errorJson = JSON.parse(errorBody)
+            errorMessage = errorJson.error?.message || errorJson.message || errorMessage
+          } catch {
+            errorMessage = `${errorMessage}\n响应内容: ${errorBody.substring(0, 200)}`
+          }
+        }
+      } catch (e) {
+        // 忽略读取错误响应体的错误
+      }
+
+      if (response.status === 401) {
+        throw new BangumiError('API 认证失败，请检查 Access Token 配置')
+      }
+      throw new BangumiError(errorMessage)
+    }
+
+    const result = await response.json()
+    console.debug('Bangumi API 返回数据:', {
+      hasData: !!result.data,
+      dataLength: result.data?.length || 0,
+      resultKeys: Object.keys(result),
+      firstItem: result.data?.[0],
+    })
+
+    if (!result.data) {
+      console.warn('Bangumi API 返回数据格式异常:', result)
+      return []
+    }
+
+    return (result.data || []) as BgmSearchResult[]
+  } catch (error: any) {
+    console.error('Bangumi 搜索错误:', error)
+    console.error('错误类型:', error.constructor.name)
+    console.error('错误消息:', error.message)
+    console.error('错误堆栈:', error.stack)
+    
+    if (error instanceof BangumiError) {
+      throw error
+    }
+    
+    // 检查是否是网络错误
+    if (error.message && (
+      error.message.includes('fetch') || 
+      error.message.includes('network') || 
+      error.message.includes('Failed to fetch') ||
+      error.message.includes('CORS') ||
+      error.name === 'TypeError'
+    )) {
+      throw new BangumiError('网络连接失败，可能是 CORS 问题。请检查网络连接或稍后重试')
+    }
+    
+    // 检查是否是超时错误
+    if (error.name === 'AbortError' || error.message.includes('超时')) {
+      throw new BangumiError('请求超时，请检查网络连接')
+    }
+    
+    throw new BangumiError(`网络错误: ${error.message || '未知错误'}`)
+  }
+}
+
+/**
+ * 获取动画详情
+ */
+export async function getAnimeDetail(id: number): Promise<any> {
+  try {
+    const url = `${BANGUMI_API_BASE}/v0/subjects/${id}`
+
+    const response = await fetch(url, {
+      headers: getRequestHeaders(false), // GET 请求不需要 Content-Type
+    })
+
+    if (!response.ok) {
+      throw new BangumiError(`获取详情失败: ${response.status}`)
+    }
+
+    return await response.json()
+  } catch (error: any) {
+    if (error instanceof BangumiError) {
+      throw error
+    }
+    throw new BangumiError(`网络错误: ${error.message}`)
+  }
+}
+
