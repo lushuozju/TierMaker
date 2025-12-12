@@ -7,13 +7,16 @@ const TITLE_KEY = 'tier-list-title'
 
 /**
  * 默认评分等级配置
+ * 等级：EX, S, A, B, C, N/A
+ * 颜色：使用预设颜色，跳过第二个（#ff9f7f）
  */
 export const DEFAULT_TIER_CONFIGS = [
-  { id: 'S', label: 'S', color: '#000000', order: 0 },
-  { id: 'A', label: 'A', color: '#333333', order: 1 },
-  { id: 'B', label: 'B', color: '#666666', order: 2 },
-  { id: 'C', label: 'C', color: '#999999', order: 3 },
-  { id: 'D', label: 'D', color: '#CCCCCC', order: 4 },
+  { id: 'EX', label: 'EX', color: '#ff7f7f', order: 0 },      // 第1个颜色：红色
+  { id: 'S', label: 'S', color: '#ffbf7f', order: 1 },       // 第3个颜色：橙色（跳过第2个）
+  { id: 'A', label: 'A', color: '#ffdf7f', order: 2 },       // 第4个颜色：浅橙色
+  { id: 'B', label: 'B', color: '#ffff7f', order: 3 },        // 第5个颜色：黄色
+  { id: 'C', label: 'C', color: '#bfff7f', order: 4 },       // 第6个颜色：浅绿色
+  { id: 'N/A', label: 'N/A', color: '#cfcfcf', order: 5 },   // 第7个颜色：灰色
 ]
 
 /**
