@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+// computed 未使用，但保留以备将来使用
 import TierRow from './TierRow.vue'
 import type { Tier, TierConfig, AnimeItem } from '../types'
 
@@ -43,7 +43,7 @@ function getTierConfig(tierId: string): TierConfig | undefined {
       class="tier-group"
     >
       <div
-        v-for="(row, rowIndex) in tier.rows"
+        v-for="row in tier.rows"
         :key="row.id"
         class="tier-row-wrapper"
       >

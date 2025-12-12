@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch, onMounted, nextTick } from 'vue'
+import { ref, watch, onMounted } from 'vue'
 import type { TierConfig } from '../types'
 import { loadBgmToken, saveBgmToken } from '../utils/storage'
 

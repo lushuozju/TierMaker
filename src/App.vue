@@ -6,7 +6,7 @@ import SearchModal from './components/SearchModal.vue'
 import ConfigModal from './components/ConfigModal.vue'
 import EditItemModal from './components/EditItemModal.vue'
 import type { Tier, AnimeItem, TierConfig } from './types'
-import { loadTierData, saveTierData, loadTierConfigs, saveTierConfigs, DEFAULT_TIER_CONFIGS, loadTitle, saveTitle, exportAllData, importAllData, type ExportData } from './utils/storage'
+import { loadTierData, saveTierData, loadTierConfigs, saveTierConfigs, loadTitle, saveTitle, exportAllData, importAllData, type ExportData } from './utils/storage'
 
 const tiers = ref<Tier[]>([])
 const tierConfigs = ref<TierConfig[]>([])

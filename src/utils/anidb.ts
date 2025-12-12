@@ -17,7 +17,8 @@ const ANIDB_CACHE_TIMESTAMP_KEY = 'anidb-api-cache-timestamp'
 // 请求频率限制：每 10 秒最多一次请求
 const REQUEST_INTERVAL = 10000 // 10 秒
 let lastRequestTime = 0
-let requestQueue: Array<() => void> = []
+// requestQueue 保留以备将来使用
+// let requestQueue: Array<() => void> = []
 
 export class AnidbError extends Error {
   constructor(message: string) {

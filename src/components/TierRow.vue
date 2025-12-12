@@ -332,14 +332,14 @@ function handleImageClick(item: AnimeItem, e: MouseEvent) {
 }
 
 // 长按检测
-const longPressTimers = ref<Map<number, NodeJS.Timeout>>(new Map())
+const longPressTimers = ref<Map<number, ReturnType<typeof setTimeout>>>(new Map())
 const longPressProgress = ref<Map<number, number>>(new Map())
-const progressIntervals = ref<Map<number, NodeJS.Timeout>>(new Map())
+const progressIntervals = ref<Map<number, ReturnType<typeof setInterval>>>(new Map())
 const justTriggeredLongPress = ref<Map<number, boolean>>(new Map())
 const LONG_PRESS_DURATION = 800 // 长按持续时间（毫秒）
 const PROGRESS_UPDATE_INTERVAL = 16 // 进度更新间隔（约 60fps）
 
-function startLongPress(item: AnimeItem, index: number, e: MouseEvent | TouchEvent) {
+function startLongPress(item: AnimeItem, index: number, _e: MouseEvent | TouchEvent) {
   if (!item.id || index === props.row.items.length) return
   
   // 清除之前的定时器
