@@ -101,7 +101,7 @@ function handleSave() {
   let finalUrl = customUrl.value.trim()
   if (!finalUrl) {
     // 如果用户清空了自定义链接，使用原始默认链接
-    finalUrl = originalUrl || undefined
+    finalUrl = originalUrl || ''
   }
   
   const updatedItem: AnimeItem = {

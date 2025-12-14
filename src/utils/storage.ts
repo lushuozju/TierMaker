@@ -1,4 +1,4 @@
-import type { Tier } from '../types'
+import type { Tier, TierConfig } from '../types'
 
 const STORAGE_KEY = 'tier-list-data'
 const TIER_CONFIG_KEY = 'tier-config'
@@ -55,7 +55,7 @@ export function loadTierData(): Tier[] {
 /**
  * 保存评分等级配置
  */
-export function saveTierConfigs(configs: typeof DEFAULT_TIER_CONFIGS): void {
+export function saveTierConfigs(configs: TierConfig[]): void {
   try {
     localStorage.setItem(TIER_CONFIG_KEY, JSON.stringify(configs))
   } catch (error) {
@@ -66,11 +66,16 @@ export function saveTierConfigs(configs: typeof DEFAULT_TIER_CONFIGS): void {
 /**
  * 加载评分等级配置
  */
-export function loadTierConfigs(): typeof DEFAULT_TIER_CONFIGS {
+export function loadTierConfigs(): TierConfig[] {
   try {
     const data = localStorage.getItem(TIER_CONFIG_KEY)
     if (data) {
-      return JSON.parse(data)
+      const configs: TierConfig[] = JSON.parse(data)
+      // 确保每个配置都有 fontSize（向后兼容）
+      return configs.map(config => ({
+        ...config,
+        fontSize: config.fontSize ?? 32
+      }))
     }
   } catch (error) {
     console.error('加载配置失败:', error)
