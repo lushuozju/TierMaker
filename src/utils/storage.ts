@@ -146,10 +146,11 @@ export function loadTitle(): string {
  */
 export interface ExportData {
   tiers: Tier[]
-  tierConfigs: typeof DEFAULT_TIER_CONFIGS
+  tierConfigs: TierConfig[]
   title: string
   exportDate: string
   version: string
+  itemsPerRow?: number
 }
 
 export function exportAllData(): ExportData {
