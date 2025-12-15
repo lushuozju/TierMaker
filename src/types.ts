@@ -83,9 +83,29 @@ export interface AnidbSearchResult {
   episodecount?: number
 }
 
+// Bangumi 角色搜索结果
+export interface BgmCharacterSearchResult {
+  id: number
+  name: string
+  nameCn?: string
+  name_cn?: string // 兼容性字段
+  nameEn?: string
+  gender?: string
+  image?: string | null
+  popularity?: number
+  date?: string // 兼容性字段（角色通常没有日期）
+  score?: number // 兼容性字段（角色通常没有评分）
+  images?: {
+    grid?: string
+    medium?: string
+    large?: string
+    small?: string // 兼容性字段
+  }
+}
+
 // 统一的搜索结果类型（用于显示）
-export type SearchResult = BgmSearchResult | VndbSearchResult | AnidbSearchResult
+export type SearchResult = BgmSearchResult | VndbSearchResult | AnidbSearchResult | BgmCharacterSearchResult
 
 // API 源类型
-export type ApiSource = 'bangumi' | 'vndb' | 'anidb'
+export type ApiSource = 'bangumi' | 'vndb' | 'anidb' | 'character'
 

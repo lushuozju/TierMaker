@@ -1,4 +1,4 @@
-import type { BgmSearchResult } from '../types'
+import type { BgmSearchResult, BgmCharacterSearchResult } from '../types'
 import { loadBgmToken } from './storage'
 
 const BANGUMI_API_BASE = 'https://api.bgm.tv'
@@ -227,6 +227,151 @@ export async function getAnimeDetail(id: number): Promise<any> {
       throw error
     }
     throw new BangumiError(`网络错误: ${error.message}`)
+  }
+}
+
+/**
+ * 搜索 Bangumi 角色
+ * 参考 anime-character-guessr 的实现
+ */
+export async function searchBangumiCharacters(
+  keyword: string,
+  offset = 0,
+  limit = 10
+): Promise<BgmCharacterSearchResult[]> {
+  if (!keyword.trim()) {
+    return []
+  }
+
+  try {
+    const url = `${BANGUMI_API_BASE}/v0/search/characters?limit=${limit}&offset=${offset}`
+    const requestBody = {
+      keyword: keyword.trim()
+    }
+
+    const headers = getRequestHeaders()
+    console.debug('Bangumi 角色搜索请求:', {
+      url,
+      keyword,
+      offset,
+      limit,
+      headers,
+      body: requestBody,
+      token: getAccessToken() ? '已设置' : '未设置',
+    })
+
+    const response = await fetchWithTimeout(
+      url,
+      {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(requestBody),
+      },
+      10000 // 10 秒超时
+    )
+
+    console.debug('Bangumi 角色搜索响应:', {
+      status: response.status,
+      statusText: response.statusText,
+      ok: response.ok,
+    })
+
+    if (!response.ok) {
+      let errorMessage = `请求失败: ${response.status} ${response.statusText}`
+      try {
+        const errorBody = await response.text()
+        console.error('Bangumi API 错误响应:', errorBody)
+        if (errorBody) {
+          try {
+            const errorJson = JSON.parse(errorBody)
+            errorMessage = errorJson.error?.message || errorJson.message || errorMessage
+          } catch {
+            errorMessage = `${errorMessage}\n响应内容: ${errorBody.substring(0, 200)}`
+          }
+        }
+      } catch (e) {
+        // 忽略读取错误响应体的错误
+      }
+
+      if (response.status === 401) {
+        throw new BangumiError('API 认证失败，请检查 Access Token 配置')
+      }
+      throw new BangumiError(errorMessage)
+    }
+
+    const result = await response.json()
+    console.debug('Bangumi 角色搜索返回数据:', {
+      hasData: !!result.data,
+      dataLength: result.data?.length || 0,
+    })
+
+    if (!result.data) {
+      console.warn('Bangumi API 返回数据格式异常:', result)
+      return []
+    }
+
+    // 转换数据格式，参考 anime-character-guessr 的 SearchBar.jsx
+    const characters = result.data.map((character: any) => {
+      // 提取中文名
+      const nameCn = character.infobox?.find((item: any) => item.key === "简体中文名")?.value || null
+      
+      // 提取英文名或罗马字
+      let nameEn: string | undefined = undefined
+      const aliases = character.infobox?.find((item: any) => item.key === '别名')?.value
+      if (aliases && Array.isArray(aliases)) {
+        const englishName = aliases.find((alias: any) => alias.k === '英文名')
+        if (englishName) {
+          nameEn = englishName.v
+        } else {
+          const romaji = aliases.find((alias: any) => alias.k === '罗马字')
+          if (romaji) {
+            nameEn = romaji.v
+          }
+        }
+      }
+
+      return {
+        id: character.id,
+        name: character.name,
+        nameCn: nameCn || undefined,
+        nameEn: nameEn,
+        // 优先使用 large，然后是 medium，最后是 grid（与搜索页面显示保持一致）
+        image: character.images?.large || character.images?.medium || character.images?.grid || null,
+        gender: character.gender || '?',
+        popularity: character.stat?.collects + character.stat?.comments || 0,
+        images: {
+          grid: character.images?.grid,
+          medium: character.images?.medium,
+          large: character.images?.large,
+        }
+      } as BgmCharacterSearchResult
+    })
+
+    return characters
+  } catch (error: any) {
+    console.error('Bangumi 角色搜索错误:', error)
+    
+    if (error instanceof BangumiError) {
+      throw error
+    }
+    
+    // 检查是否是网络错误
+    if (error.message && (
+      error.message.includes('fetch') || 
+      error.message.includes('network') || 
+      error.message.includes('Failed to fetch') ||
+      error.message.includes('CORS') ||
+      error.name === 'TypeError'
+    )) {
+      throw new BangumiError('网络连接失败，可能是 CORS 问题。请检查网络连接或稍后重试')
+    }
+    
+    // 检查是否是超时错误
+    if (error.name === 'AbortError' || error.message.includes('超时')) {
+      throw new BangumiError('请求超时，请检查网络连接')
+    }
+    
+    throw new BangumiError(`网络错误: ${error.message || '未知错误'}`)
   }
 }
 

@@ -215,6 +215,39 @@ function handleImageLoad(event: Event) {
   const img = event.target as HTMLImageElement
   console.log('✅ 图片加载成功:', img.src)
   
+  // 检查是否为角色图片（ID 以 character_ 开头）
+  const itemId = img.getAttribute('data-item-id') || ''
+  const isCharacter = typeof itemId === 'string' && itemId.startsWith('character_')
+  
+  // 角色图片使用 contain 模式，与搜索结果保持一致
+  if (isCharacter) {
+    // 设置图片样式，与搜索结果一致
+    img.style.objectFit = 'contain'
+    img.style.width = '100px'
+    img.style.height = '133px' // 固定高度，与容器一致
+    img.style.display = 'block'
+    
+    // 确保容器有正确的类名和背景色
+    nextTick(() => {
+      const container = img.parentElement
+      if (container) {
+        container.classList.add('character-container')
+        // 确保背景色与搜索结果一致
+        if (!container.style.backgroundColor) {
+          container.style.backgroundColor = '#f5f5f5'
+        }
+      }
+      
+      // 确保 tier-item 有正确的类名
+      const tierItem = container?.closest('.tier-item')
+      if (tierItem) {
+        tierItem.classList.add('character-item')
+      }
+    })
+    
+    return
+  }
+  
   // 检查图片是否需要裁剪
   // 按3:4比例计算，宽度100px对应高度133.33px
   const targetHeight = 133.33
@@ -455,7 +488,8 @@ function getLongPressProgress(index: number): number {
       class="tier-item"
       :class="{ 
         'empty': !item.id,
-        'duplicate': item.id && props.duplicateItemIds?.has(item.id)
+        'duplicate': item.id && props.duplicateItemIds?.has(item.id),
+        'character-item': item.id && String(item.id).startsWith('character_')
       }"
       @click="handleItemClick(index)"
       @mousedown="handleMouseDown(item, index, $event)"
@@ -465,7 +499,11 @@ function getLongPressProgress(index: number): number {
       @touchend="handleTouchEnd(index, $event)"
       @touchcancel="handleTouchCancel(index)"
     >
-      <div v-if="item.image" class="item-image-container">
+      <div 
+        v-if="item.image" 
+        class="item-image-container"
+        :class="{ 'character-container': item.id && String(item.id).startsWith('character_') }"
+      >
         <img
           :src="item.image"
           :data-original-src="item.image"
@@ -541,6 +579,12 @@ function getLongPressProgress(index: number): number {
   overflow: hidden;
 }
 
+/* 角色条目：保持与普通条目相同的尺寸 */
+.tier-item.character-item {
+  height: 173px; /* 保持固定高度，与普通条目一致 */
+  overflow: hidden; /* 保持 hidden，与普通条目一致 */
+}
+
 .tier-item:hover:not(.empty) {
   transform: translateY(-2px);
   box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
@@ -594,6 +638,26 @@ function getLongPressProgress(index: number): number {
   width: 100px; /* 固定宽度 */
   height: auto;
   object-fit: contain; /* 默认不拉伸，保持原样 */
+  object-position: center;
+  display: block;
+}
+
+/* 角色图片容器：与搜索结果保持一致 */
+.item-image-container.character-container {
+  width: 100px;
+  height: 133px; /* 保持与普通图片相同的容器高度 */
+  overflow: hidden; /* 保持 hidden，与搜索结果一致 */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #f5f5f5; /* 与搜索结果相同的背景色 */
+}
+
+/* 角色图片：与搜索结果保持一致，使用 contain 模式 */
+.item-image-container.character-container .item-image {
+  width: 100px;
+  height: 133px; /* 固定高度，与容器一致 */
+  object-fit: contain; /* 与搜索结果一致 */
   object-position: center;
   display: block;
 }
