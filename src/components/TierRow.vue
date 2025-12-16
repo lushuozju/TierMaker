@@ -215,56 +215,26 @@ function handleImageLoad(event: Event) {
   const img = event.target as HTMLImageElement
   console.log('✅ 图片加载成功:', img.src)
   
-  // 检查是否为角色图片（ID 以 character_ 开头）
-  const itemId = img.getAttribute('data-item-id') || ''
-  const isCharacter = typeof itemId === 'string' && itemId.startsWith('character_')
-  
-  // 角色图片使用 contain 模式，与搜索结果保持一致
-  if (isCharacter) {
-    // 设置图片样式，与搜索结果一致
-    img.style.objectFit = 'contain'
-    img.style.width = '100px'
-    img.style.height = '133px' // 固定高度，与容器一致
-    img.style.display = 'block'
-    
-    // 确保容器有正确的类名和背景色
-    nextTick(() => {
-      const container = img.parentElement
-      if (container) {
-        container.classList.add('character-container')
-        // 确保背景色与搜索结果一致
-        if (!container.style.backgroundColor) {
-          container.style.backgroundColor = '#f5f5f5'
-        }
-      }
-      
-      // 确保 tier-item 有正确的类名
-      const tierItem = container?.closest('.tier-item')
-      if (tierItem) {
-        tierItem.classList.add('character-item')
-      }
-    })
-    
-    return
-  }
-  
-  // 检查图片是否需要裁剪
-  // 按3:4比例计算，宽度100px对应高度133.33px
-  const targetHeight = 133.33
+  // 统一处理所有图片（包括角色和bangumi），使用相同的裁剪规则
+  // 目标宽高比 target = 0.75 (3:4)，容器尺寸 100px × 133px
+  const targetAspectRatio = 0.75 // 3/4
+  const containerWidth = 100
+  const containerHeight = 133
   const naturalAspectRatio = img.naturalWidth / img.naturalHeight
-  const targetAspectRatio = 3 / 4 // 0.75
   
-  if (naturalAspectRatio < targetAspectRatio) {
-    // 图片更高（或更窄），按100px宽度缩放后高度会超过133px，需要裁剪
-    img.style.objectFit = 'cover'
-    img.style.width = '100px'
-    img.style.height = '133px'
+  // 统一使用 cover 模式，根据宽高比设置不同的裁剪位置
+  img.style.objectFit = 'cover'
+  img.style.width = `${containerWidth}px`
+  img.style.height = `${containerHeight}px`
+  
+  if (naturalAspectRatio > targetAspectRatio) {
+    // s > 0.75：图片较宽
+    // 等比缩放图片，使高度与图片框对齐（133px），然后居中裁剪
+    img.style.objectPosition = 'center'
   } else {
-    // 图片更宽（或更矮），按100px宽度缩放后高度不超过133px，不拉伸保持原样
-    img.style.objectFit = 'contain'
-    img.style.width = '100px'
-    img.style.height = 'auto'
-    img.style.maxHeight = '133px'
+    // s < 0.75：图片较高
+    // 等比缩放图片，使宽度与图片框宽度一致（100px），向下裁剪（保留顶部）
+    img.style.objectPosition = 'top'
   }
 }
 
@@ -457,8 +427,7 @@ function getLongPressProgress(index: number): number {
       class="tier-item"
       :class="{ 
         'empty': !item.id,
-        'duplicate': item.id && props.duplicateItemIds?.has(item.id),
-        'character-item': item.id && String(item.id).startsWith('character_')
+        'duplicate': item.id && props.duplicateItemIds?.has(item.id)
       }"
       @click="handleItemClick(index)"
       @mousedown="handleMouseDown(item, index, $event)"
@@ -471,7 +440,6 @@ function getLongPressProgress(index: number): number {
       <div 
         v-if="item.image" 
         class="item-image-container"
-        :class="{ 'character-container': item.id && String(item.id).startsWith('character_') }"
       >
         <img
           :src="item.image"
@@ -547,10 +515,6 @@ function getLongPressProgress(index: number): number {
 }
 
 /* 角色条目：保持与普通条目相同的尺寸 */
-.tier-item.character-item {
-  height: 173px; /* 保持固定高度，与普通条目一致 */
-  overflow: hidden; /* 保持 hidden，与普通条目一致 */
-}
 
 .tier-item:hover:not(.empty) {
   transform: translateY(-2px);
@@ -603,31 +567,12 @@ function getLongPressProgress(index: number): number {
 
 .item-image {
   width: 100px; /* 固定宽度 */
-  height: auto;
-  object-fit: contain; /* 默认不拉伸，保持原样 */
-  object-position: center;
-  display: block;
-}
-
-/* 角色图片容器：与搜索结果保持一致 */
-.item-image-container.character-container {
-  width: 100px;
-  height: 133px; /* 保持与普通图片相同的容器高度 */
-  overflow: hidden; /* 保持 hidden，与搜索结果一致 */
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--bg-light-color); /* 与搜索结果相同的背景色 */
-}
-
-/* 角色图片：与搜索结果保持一致，使用 contain 模式 */
-.item-image-container.character-container .item-image {
-  width: 100px;
   height: 133px; /* 固定高度，与容器一致 */
-  object-fit: contain; /* 与搜索结果一致 */
-  object-position: center;
+  object-fit: cover; /* 使用 cover 模式，由 JavaScript 动态设置 object-position */
+  object-position: center; /* 默认居中，JavaScript 会根据宽高比调整 */
   display: block;
 }
+
 
 .item-image.clickable {
   cursor: pointer;

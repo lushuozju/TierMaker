@@ -570,6 +570,7 @@ function handleFileImport(e: Event) {
 }
 
 // 保存为高清图片
+// 保存为高清图片（极速版：移除Base64转换，使用CSS逻辑）
 async function handleExportImage() {
   if (!appContentRef.value) {
     alert('无法找到要导出的内容')
@@ -583,280 +584,103 @@ async function handleExportImage() {
   isExportingImage.value = true
   
   try {
-    // 等待DOM更新，确保empty slot已隐藏
     await nextTick()
-    await new Promise(resolve => setTimeout(resolve, 100))
     
-    // 保存当前滚动位置
+    // 保存滚动位置并滚回顶部（防止截图不全）
     const originalScrollX = window.scrollX
     const originalScrollY = window.scrollY
-    
-    // 滚动到顶部
     window.scrollTo(0, 0)
     await new Promise(resolve => setTimeout(resolve, 100))
     
-    // 获取实际内容区域的尺寸（tight 模式，不包含任何留白）
-    const scrollWidth = appContentRef.value?.scrollWidth || appContentRef.value?.offsetWidth || 1400
-    const scrollHeight = Math.max(
-      document.documentElement.scrollHeight,
-      document.body.scrollHeight,
-      appContentRef.value.scrollHeight
-    )
-    
-    // 创建一个图片URL到base64的映射，用于在onclone中使用
-    const imageUrlToBase64 = new Map<string, string>()
-    
-    // 预先转换所有图片为base64
-    const allImages = Array.from(document.querySelectorAll('img')) as HTMLImageElement[]
-    const conversionPromises = allImages.map(async (img) => {
-      // 优先使用data-original-src，如果没有则使用src
-      const originalUrl = img.getAttribute('data-original-src') || img.src
-      
-      if (!originalUrl || originalUrl === '') {
-        return
-      }
-      
-      // 如果已经是base64，直接保存
-      if (originalUrl.startsWith('data:')) {
-        imageUrlToBase64.set(originalUrl, originalUrl)
-        // 同时保存src的映射（如果src不同）
-        if (img.src && img.src !== originalUrl) {
-          imageUrlToBase64.set(img.src, originalUrl)
-        }
-        return
-      }
-      
-      // 方法1: 尝试从已加载的图片元素中直接获取base64（绕过CORS）
-      try {
-        // 检查图片是否已完全加载
-        if (img.complete && img.naturalWidth > 0 && img.naturalHeight > 0) {
-          const base64 = await convertLoadedImageToBase64(img)
-          if (base64) {
-            imageUrlToBase64.set(originalUrl, base64)
-            if (img.src && img.src !== originalUrl) {
-              imageUrlToBase64.set(img.src, base64)
-            }
-            // console.log('✅ 从已加载图片获取base64:', originalUrl.substring(0, 50) + '...')
-            return
-          }
-        }
-      } catch (error) {
-        // console.debug('从已加载图片获取失败，尝试其他方法:', error)
-      }
-      
-      // 方法2: 如果是URL，尝试通过网络转换（可能因CORS失败）
-      try {
-        const base64 = await convertImageToBase64ForExport(originalUrl)
-        if (base64) {
-          // 保存原始URL到base64的映射
-          imageUrlToBase64.set(originalUrl, base64)
-          // 同时保存src的映射（如果src不同）
-          if (img.src && img.src !== originalUrl) {
-            imageUrlToBase64.set(img.src, base64)
-          }
-          // console.log('✅ 通过网络转换成功:', originalUrl.substring(0, 50) + '...')
-        } else {
-          // console.warn('⚠️ 图片转换返回null:', originalUrl)
-        }
-      } catch (error) {
-        // console.warn('❌ 无法转换图片:', originalUrl, error)
-      }
-    })
-    
-    // 等待所有图片转换完成
-    const results = await Promise.allSettled(conversionPromises)
-    
-    // 统计转换结果（调试用，可注释）
-    // const successCount = results.filter(r => r.status === 'fulfilled').length
-    // const failCount = results.filter(r => r.status === 'rejected').length
-    // console.log(`图片转换完成: 成功 ${successCount}, 失败 ${failCount}, 总计 ${allImages.length}`)
-    // console.log('已转换的图片URL:', Array.from(imageUrlToBase64.keys()).slice(0, 5))
-    
-    // 额外等待确保渲染完成
-    await new Promise(resolve => setTimeout(resolve, 500))
-    
-    // 使用 html2canvas 截图，tight 模式（紧贴内容，无留白）
     const canvas = await html2canvas(appContentRef.value, {
-      scale: 2, // 2倍缩放，提高清晰度
-      useCORS: false, // 禁用CORS，因为我们已经在onclone中处理了所有图片
-      allowTaint: false, // 不允许污染画布（确保所有图片都已转换为base64）
-      logging: true, // 启用日志以便调试
-      backgroundColor: getCurrentThemeBackgroundColor(), // 根据当前主题设置背景色
-      imageTimeout: 30000, // 增加图片加载超时时间
-      removeContainer: false, // 保留容器
-      foreignObjectRendering: false, // 禁用 foreignObject，使用传统渲染
+      scale: 2, // 保持 2 倍高清
+      useCORS: true, // <--- 核心：开启跨域，利用 wsrv.nl 的 Header
+      allowTaint: false,
+      logging: false,
+      backgroundColor: getCurrentThemeBackgroundColor(),
+      imageTimeout: 15000, // 给予足够的加载时间
+      
       onclone: async (clonedDoc) => {
-        // 确保克隆的文档也应用了正确的主题
+        // 1. 同步主题
         const currentTheme = document.documentElement.getAttribute('data-theme') || 'auto'
         clonedDoc.documentElement.setAttribute('data-theme', currentTheme)
         
-        // 在克隆的文档中，将所有URL图片替换为base64
-        const clonedImages = clonedDoc.querySelectorAll('img')
-        // console.log(`开始处理 ${clonedImages.length} 张图片`)
-        
-        for (const clonedImg of clonedImages) {
-          // 优先使用data-original-src获取原始URL
-          const dataOriginalSrc = clonedImg.getAttribute('data-original-src')
-          const currentSrc = clonedImg.getAttribute('src')
-          
-          // 确定要查找的URL（优先使用data-original-src）
-          const urlToLookup = dataOriginalSrc || currentSrc
-          
-          if (!urlToLookup) {
-            continue
-          }
-          
-          // 如果已经是base64，跳过
-          if (urlToLookup.startsWith('data:')) {
-            continue
-          }
-          
-          // 查找对应的base64数据
-          let base64Data = imageUrlToBase64.get(urlToLookup)
-          
-          // 如果通过原始URL没找到，尝试通过当前src查找
-          if (!base64Data && currentSrc && currentSrc !== urlToLookup) {
-            base64Data = imageUrlToBase64.get(currentSrc)
-          }
-          
-          // 如果找到了base64数据，替换src
-          if (base64Data) {
-            clonedImg.src = base64Data
-            // console.log('✅ 在onclone中替换图片:', urlToLookup.substring(0, 50) + '...')
-          } else {
-            // 如果还没转换，尝试从原始文档中找到对应的img元素
-            // console.warn('⚠️ 图片未预先转换，尝试从原始DOM获取:', urlToLookup)
-            try {
-              // 在原始文档中查找对应的img元素（使用更灵活的查询）
-              let originalImg: HTMLImageElement | null = null
-              
-              // 先尝试通过data-original-src查找
-              if (dataOriginalSrc) {
-                originalImg = document.querySelector(`img[data-original-src="${dataOriginalSrc}"]`) as HTMLImageElement
-              }
-              
-              // 如果没找到，尝试通过src查找
-              if (!originalImg && currentSrc) {
-                originalImg = document.querySelector(`img[src="${currentSrc}"]`) as HTMLImageElement
-              }
-              
-              // 如果还是没找到，尝试通过data-original-src查找（使用urlToLookup）
-              if (!originalImg) {
-                originalImg = document.querySelector(`img[data-original-src="${urlToLookup}"]`) as HTMLImageElement
-              }
-              
-              if (originalImg && originalImg.complete && originalImg.naturalWidth > 0 && originalImg.naturalHeight > 0) {
-                // 从已加载的原始图片元素获取base64
-                const base64 = await convertLoadedImageToBase64(originalImg)
-                if (base64) {
-                  clonedImg.src = base64
-                  imageUrlToBase64.set(urlToLookup, base64)
-                  if (currentSrc && currentSrc !== urlToLookup) {
-                    imageUrlToBase64.set(currentSrc, base64)
-                  }
-                  // console.log('✅ 在onclone中从原始DOM获取成功:', urlToLookup.substring(0, 50) + '...')
-                } else {
-                  console.error('❌ 在onclone中从原始DOM获取返回null:', urlToLookup)
-                }
-              } else {
-                // console.warn('⚠️ 原始图片未找到或未加载:', urlToLookup, {
-                //   found: !!originalImg,
-                //   complete: originalImg?.complete,
-                //   naturalWidth: originalImg?.naturalWidth,
-                //   naturalHeight: originalImg?.naturalHeight
-                // })
-              }
-            } catch (error) {
-              console.error('❌ 在onclone中转换图片失败:', urlToLookup, error)
-            }
-          }
-        }
-        
-        console.log('onclone处理完成')
-        
-        // 处理empty slot（添加作品块）
-        // 如果该等级存在作品，那么完全隐藏添加作品块（display: none）
-        // 如果该等级不存在作品，那么添加一个看不见的作品占位，使得该行的高度和有作品的等级高度一致
-        const emptySlots = clonedDoc.querySelectorAll('.tier-item.empty')
-        emptySlots.forEach((slot) => {
-          const slotElement = slot as HTMLElement
-          const tierRow = slotElement.parentElement
-          if (!tierRow) return
-          
-          // 检查该等级是否有作品（非empty的tier-item）
-          const allItems = Array.from(tierRow.children) as HTMLElement[]
-          const hasItems = allItems.some(item => !item.classList.contains('empty'))
-          
-          if (hasItems) {
-            // 如果该等级存在作品，完全隐藏添加作品块
-            slotElement.style.display = 'none'
-          } else {
-            // 如果该等级不存在作品，将添加作品块转换为不可见的作品占位
-            // 设置与作品相同的高度（173px）和宽度（100px），并完全透明
-            // 使用 opacity: 0 而不是 visibility: hidden，确保元素仍占据空间
-            slotElement.style.width = '100px'
-            slotElement.style.height = '173px'
-            slotElement.style.minHeight = '173px'
-            slotElement.style.maxHeight = '173px'
-            slotElement.style.opacity = '0'
-            slotElement.style.pointerEvents = 'none'
-            // 移除虚线边框，使其看起来像作品
-            slotElement.style.border = 'none'
-            slotElement.style.borderWidth = '0'
-            // 隐藏内部内容（占位符文字和图标）
-            const placeholder = slotElement.querySelector('.item-placeholder')
-            if (placeholder) {
-              (placeholder as HTMLElement).style.display = 'none'
-            }
-            const placeholderText = slotElement.querySelector('.placeholder-text')
-            if (placeholderText) {
-              (placeholderText as HTMLElement).style.display = 'none'
-            }
-          }
-        })
-        
-        // 隐藏所有按钮，但保留标题显示
-        const buttons = clonedDoc.querySelectorAll('button, .btn')
-        buttons.forEach((btn) => {
-          (btn as HTMLElement).style.display = 'none'
-        })
-        // 隐藏 header-actions 容器（包含所有按钮）
-        const headerActions = clonedDoc.querySelector('.header-actions') as HTMLElement
-        if (headerActions) {
-          headerActions.style.display = 'none'
-        }
-        // 隐藏 header-left 占位元素
+        // 2. 隐藏无关 UI (按钮等)
+        const buttons = clonedDoc.querySelectorAll('button, .btn, .header-actions')
+        buttons.forEach((el) => (el as HTMLElement).style.display = 'none')
         const headerLeft = clonedDoc.querySelector('.header-left') as HTMLElement
         if (headerLeft) {
           headerLeft.style.display = 'none'
         }
         
-        // 确保标题正常显示和居中
-        const clonedTitle = clonedDoc.querySelector('.title') as HTMLElement
-        if (clonedTitle) {
-          clonedTitle.style.display = 'block'
-          clonedTitle.style.visibility = 'visible'
-          clonedTitle.style.position = 'relative'
-          clonedTitle.style.left = 'auto'
-          clonedTitle.style.transform = 'none'
-          clonedTitle.style.textAlign = 'center'
-          clonedTitle.style.width = '100%'
-          // 移除标题的所有 margin 和 padding，确保只有 paddingBottom 控制间距
-          clonedTitle.style.margin = '0'
-          clonedTitle.style.marginTop = '0'
-          clonedTitle.style.marginBottom = '0'
-          clonedTitle.style.padding = '0'
-          clonedTitle.style.paddingTop = '0'
-          clonedTitle.style.paddingBottom = '0'
-          // 设置 line-height 为 1，确保标题高度等于字体大小
-          clonedTitle.style.lineHeight = '1'
-        }
+        // 3. 处理 Empty Slots
+        const emptySlots = clonedDoc.querySelectorAll('.tier-item.empty')
+        emptySlots.forEach((slot) => {
+          const el = slot as HTMLElement
+          const parent = el.parentElement
+          const hasItems = parent && Array.from(parent.children).some(c => !c.classList.contains('empty'))
+          
+          if (hasItems) {
+            el.style.display = 'none'
+          } else {
+            el.style.opacity = '0'
+            el.style.border = 'none'
+            const content = el.querySelectorAll('.item-placeholder, .placeholder-text')
+            content.forEach(c => (c as HTMLElement).style.display = 'none')
+          }
+        })
         
-        // 确保 header 正常显示，并设置标题和横线的间距为字体大小的一半
-        const clonedHeader = clonedDoc.querySelector('.header') as HTMLElement
-        if (clonedHeader) {
-          // 从原始文档获取标题的实际字体大小
-          let titleFontSize = 32 // 默认值
+        // 4. 【关键步骤】将所有图片URL替换为CORS代理URL，并等待加载后裁剪
+        const allImages = clonedDoc.querySelectorAll('img') as NodeListOf<HTMLImageElement>
+        const imageProcessPromises: Promise<void>[] = []
+        
+        allImages.forEach((img) => {
+          const processPromise = new Promise<void>(async (resolve) => {
+            const originalSrc = img.getAttribute('data-original-src') || img.getAttribute('src')
+            
+            // 替换为CORS代理URL
+            if (originalSrc && !originalSrc.startsWith('data:') && !originalSrc.includes('wsrv.nl')) {
+              const proxyUrl = getCorsProxyUrl(originalSrc)
+              img.src = proxyUrl
+              img.crossOrigin = 'anonymous'
+            }
+            
+            // 等待图片加载完成
+            const waitForLoad = () => {
+              if (img.complete && img.naturalWidth > 0 && img.naturalHeight > 0) {
+                // 图片已加载，进行裁剪
+                cropImageWithCanvas(img).then((croppedBase64) => {
+                  if (croppedBase64) {
+                    img.src = croppedBase64
+                    img.style.width = '100px'
+                    img.style.height = '133px'
+                    img.style.objectFit = 'none' // 不再需要object-fit
+                  } else {
+                    // 如果裁剪失败，使用CSS方式
+                    applySmartCropToImage(img)
+                  }
+                  resolve()
+                })
+              } else {
+                // 图片未加载完成，等待加载
+                img.onload = waitForLoad
+                img.onerror = () => resolve()
+              }
+            }
+            
+            waitForLoad()
+          })
+          
+          imageProcessPromises.push(processPromise)
+        })
+        
+        // 等待所有图片处理完成
+        await Promise.allSettled(imageProcessPromises)
+        
+        // 5. 确保 Header 样式正确
+        const header = clonedDoc.querySelector('.header') as HTMLElement
+        if (header) {
+          let titleFontSize = 32
           try {
             const originalTitle = document.querySelector('.title') as HTMLElement
             if (originalTitle) {
@@ -868,51 +692,37 @@ async function handleExportImage() {
               }
             }
           } catch (e) {
-            // 如果获取失败，使用默认值
             console.warn('获取标题字体大小失败，使用默认值32px:', e)
           }
-          const titleHalfFontSize = titleFontSize / 2
-          
-          clonedHeader.style.display = 'flex'
-          clonedHeader.style.justifyContent = 'center'
-          clonedHeader.style.alignItems = 'center'
-          clonedHeader.style.marginBottom = '0' // 移除底部间距，让横线紧贴第一个等级
-          clonedHeader.style.paddingTop = '0' // 确保顶部没有额外间距
-          clonedHeader.style.paddingBottom = `${titleHalfFontSize}px` // 标题和横线的间距为字体大小的一半
-          // 保留 border-bottom，与页面显示一致
+          header.style.paddingBottom = `${titleFontSize / 2}px`
+          header.style.marginBottom = '0'
         }
         
-        // 设置 tier-list 的顶部间距
+        // 6. 确保标题正常显示
+        const clonedTitle = clonedDoc.querySelector('.title') as HTMLElement
+        if (clonedTitle) {
+          clonedTitle.style.display = 'block'
+          clonedTitle.style.visibility = 'visible'
+          clonedTitle.style.position = 'relative'
+          clonedTitle.style.left = 'auto'
+          clonedTitle.style.transform = 'none'
+          clonedTitle.style.textAlign = 'center'
+          clonedTitle.style.width = '100%'
+          clonedTitle.style.margin = '0'
+          clonedTitle.style.padding = '0'
+          clonedTitle.style.lineHeight = '1'
+        }
+        
+        // 7. 设置 tier-list 的顶部间距
         const clonedTierList = clonedDoc.querySelector('.tier-list') as HTMLElement
         if (clonedTierList) {
-          clonedTierList.style.marginTop = '0' // 移除顶部外边距，与页面显示一致
+          clonedTierList.style.marginTop = '0'
           clonedTierList.style.paddingTop = '0'
         }
         
-        // 不要恢复第一个 tier-group 的 border-top（CSS :first-child 已经隐藏它）
-        // 第一个等级上面的横线是 header 的 border-bottom，已经保留了
-        const clonedTierGroups = clonedDoc.querySelectorAll('.tier-group') as NodeListOf<HTMLElement>
-        if (clonedTierGroups.length > 0) {
-          const firstGroup = clonedTierGroups[0]
-          // 保持 CSS 的 :first-child 规则（border-top: none），只移除间距
-          firstGroup.style.marginTop = '0'
-          firstGroup.style.paddingTop = '0'
-        }
-        
-        // 不要恢复第一个 tier-row-wrapper 的 border-top（CSS :first-child 已经隐藏它）
-        const clonedTierRowWrappers = clonedDoc.querySelectorAll('.tier-row-wrapper') as NodeListOf<HTMLElement>
-        if (clonedTierRowWrappers.length > 0) {
-          const firstWrapper = clonedTierRowWrappers[0]
-          // 保持 CSS 的 :first-child 规则（border-top: none），只移除间距
-          firstWrapper.style.marginTop = '0'
-          firstWrapper.style.paddingTop = '0'
-        }
-        
-        // Tight 模式：移除所有留白，确保图片紧贴内容
-        // 获取实际页面的 app 宽度，应用到克隆的 app 上
+        // 8. Tight 模式：移除所有留白
         const originalApp = appContentRef.value as HTMLElement
         const originalAppWidth = originalApp.offsetWidth || originalApp.scrollWidth
-        
         const clonedApp = clonedDoc.querySelector('.app') as HTMLElement
         if (clonedApp) {
           clonedApp.style.padding = '0'
@@ -920,47 +730,34 @@ async function handleExportImage() {
           clonedApp.style.width = `${originalAppWidth}px`
           clonedApp.style.maxWidth = `${originalAppWidth}px`
         }
-        
-        // 确保 tier-row-wrapper 的宽度与实际页面保持一致
-        const originalTierRowWrappers = document.querySelectorAll('.tier-row-wrapper') as NodeListOf<HTMLElement>
-        
-        clonedTierRowWrappers.forEach((clonedWrapper, index) => {
-          const originalWrapper = originalTierRowWrappers[index]
-          if (clonedWrapper && originalWrapper) {
-            const originalWidth = originalWrapper.offsetWidth || originalWrapper.scrollWidth
-            clonedWrapper.style.width = `${originalWidth}px`
-            clonedWrapper.style.maxWidth = `${originalWidth}px`
-          }
-        })
-      },
+      }
     })
     
-    // 恢复滚动位置
+    // 恢复滚动
     window.scrollTo(originalScrollX, originalScrollY)
     
-    // 转换为 blob
+    // 导出
     canvas.toBlob((blob) => {
       if (!blob) {
         alert('生成图片失败')
         isExportingImage.value = false
         return
       }
-      
-      // 创建下载链接
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
-      a.download = `tier-list-${new Date().toISOString().split('T')[0]}.png`
+      // 使用 JPEG 0.9 质量，比 PNG 快且体积小，画质几乎无损
+      a.download = `tier-list-${new Date().toISOString().split('T')[0]}.jpg`
       document.body.appendChild(a)
       a.click()
       document.body.removeChild(a)
       URL.revokeObjectURL(url)
-      
       isExportingImage.value = false
-    }, 'image/png', 1.0) // 最高质量
+    }, 'image/jpeg', 0.9)
+    
   } catch (error) {
     console.error('导出图片失败:', error)
-    alert('导出图片失败：' + (error instanceof Error ? error.message : '未知错误'))
+    alert('导出失败，请检查网络连接')
     isExportingImage.value = false
   }
 }
@@ -1050,82 +847,102 @@ async function handleExportPDF() {
       sum + tier.rows.reduce((rowSum, row) => rowSum + row.items.filter(item => item.id).length, 0), 0)
     // console.log(`📊 总共收集到 ${itemLinks.length} 个链接，总作品数: ${totalItems}`)
     
-    // 使用 html2canvas 生成图片（复用现有的图片转换逻辑）
-    // 先转换图片，复用 handleExportImage 的逻辑
-    const allImages = appContentRef.value.querySelectorAll('img') as NodeListOf<HTMLImageElement>
-    const imageUrlToBase64 = new Map<string, string>()
-    
-    const conversionPromises = Array.from(allImages).map(async (img) => {
-      const originalUrl = img.getAttribute('data-original-src') || img.src
-      if (!originalUrl || originalUrl.startsWith('data:') || imageUrlToBase64.has(originalUrl)) {
-        return
-      }
-      
-      try {
-        if (img.complete && img.naturalWidth > 0 && img.naturalHeight > 0) {
-          const base64 = await convertLoadedImageToBase64(img)
-          if (base64) {
-            imageUrlToBase64.set(originalUrl, base64)
-            if (img.src && img.src !== originalUrl) {
-              imageUrlToBase64.set(img.src, base64)
-            }
-          }
-        }
-      } catch (error) {
-        console.warn('转换图片失败:', originalUrl, error)
-      }
-    })
-    
-    await Promise.allSettled(conversionPromises)
-    await new Promise(resolve => setTimeout(resolve, 500))
-    
+    // 使用 html2canvas 生成图片（极速版：使用CORS直连）
     const canvas = await html2canvas(appContentRef.value, {
       scale: 2,
-      useCORS: false,
+      useCORS: true, // 开启CORS支持，利用wsrv.nl代理的CORS Header
       allowTaint: false,
       logging: false,
-      backgroundColor: getCurrentThemeBackgroundColor(), // 根据当前主题设置背景色
+      backgroundColor: getCurrentThemeBackgroundColor(),
+      imageTimeout: 15000,
       onclone: async (clonedDoc) => {
-        // 确保克隆的文档也应用了正确的主题
+        // 同步主题
         const currentTheme = document.documentElement.getAttribute('data-theme') || 'auto'
         clonedDoc.documentElement.setAttribute('data-theme', currentTheme)
         
-        // 在克隆的文档中，将所有URL图片替换为base64
-        const clonedImages = clonedDoc.querySelectorAll('img')
-        
-        for (const clonedImg of clonedImages) {
-          const originalSrc = clonedImg.getAttribute('data-original-src') || clonedImg.getAttribute('src')
-          if (originalSrc && !originalSrc.startsWith('data:')) {
-            const base64 = imageUrlToBase64.get(originalSrc)
-            if (base64) {
-              clonedImg.setAttribute('src', base64)
-            }
-          }
-        }
-        
-        // 隐藏所有按钮，但保留标题显示（与handleExportImage相同）
-        const buttons = clonedDoc.querySelectorAll('button, .btn')
-        buttons.forEach((btn) => {
-          (btn as HTMLElement).style.display = 'none'
-        })
-        // 隐藏 header-actions 容器（包含所有按钮）
-        const headerActions = clonedDoc.querySelector('.header-actions') as HTMLElement
-        if (headerActions) {
-          headerActions.style.display = 'none'
-        }
-        // 隐藏 header-left 占位元素
+        // 隐藏 UI
+        clonedDoc.querySelectorAll('button, .btn, .header-actions').forEach((el: any) => el.style.display = 'none')
         const headerLeft = clonedDoc.querySelector('.header-left') as HTMLElement
         if (headerLeft) {
           headerLeft.style.display = 'none'
         }
-        
-        // 隐藏所有模态框
         const modals = clonedDoc.querySelectorAll('.modal-overlay, [class*="modal"]')
         modals.forEach((modal) => {
           (modal as HTMLElement).style.display = 'none'
         })
         
-        // 确保标题正常显示和居中
+        // 将所有图片URL替换为CORS代理URL，并等待加载后裁剪
+        const allImages = clonedDoc.querySelectorAll('img') as NodeListOf<HTMLImageElement>
+        const imageProcessPromises: Promise<void>[] = []
+        
+        allImages.forEach((img) => {
+          const processPromise = new Promise<void>(async (resolve) => {
+            const originalSrc = img.getAttribute('data-original-src') || img.getAttribute('src')
+            
+            // 替换为CORS代理URL
+            if (originalSrc && !originalSrc.startsWith('data:') && !originalSrc.includes('wsrv.nl')) {
+              const proxyUrl = getCorsProxyUrl(originalSrc)
+              img.src = proxyUrl
+              img.crossOrigin = 'anonymous'
+            }
+            
+            // 等待图片加载完成
+            const waitForLoad = () => {
+              if (img.complete && img.naturalWidth > 0 && img.naturalHeight > 0) {
+                // 图片已加载，进行裁剪
+                cropImageWithCanvas(img).then((croppedBase64) => {
+                  if (croppedBase64) {
+                    img.src = croppedBase64
+                    img.style.width = '100px'
+                    img.style.height = '133px'
+                    img.style.objectFit = 'none' // 不再需要object-fit
+                  } else {
+                    // 如果裁剪失败，使用CSS方式
+                    applySmartCropToImage(img)
+                  }
+                  resolve()
+                })
+              } else {
+                // 图片未加载完成，等待加载
+                img.onload = waitForLoad
+                img.onerror = () => resolve()
+              }
+            }
+            
+            waitForLoad()
+          })
+          
+          imageProcessPromises.push(processPromise)
+        })
+        
+        // 等待所有图片处理完成
+        await Promise.allSettled(imageProcessPromises)
+        
+        // 处理 Empty Slots
+        const emptySlots = clonedDoc.querySelectorAll('.tier-item.empty')
+        emptySlots.forEach((slot) => {
+          const el = slot as HTMLElement
+          const parent = el.parentElement
+          const hasItems = parent && Array.from(parent.children).some(c => !c.classList.contains('empty'))
+          
+          if (hasItems) {
+            el.style.display = 'none'
+          } else {
+            el.style.opacity = '0'
+            el.style.border = 'none'
+            const content = el.querySelectorAll('.item-placeholder, .placeholder-text')
+            content.forEach(c => (c as HTMLElement).style.display = 'none')
+          }
+        })
+        
+        // 确保 Header 样式正确
+        const header = clonedDoc.querySelector('.header') as HTMLElement
+        if (header) {
+          header.style.paddingBottom = `${titleFontSize.value / 2}px`
+          header.style.marginBottom = '0'
+        }
+        
+        // 确保标题正常显示
         const clonedTitle = clonedDoc.querySelector('.title') as HTMLElement
         if (clonedTitle) {
           clonedTitle.style.display = 'block'
@@ -1135,29 +952,9 @@ async function handleExportPDF() {
           clonedTitle.style.transform = 'none'
           clonedTitle.style.textAlign = 'center'
           clonedTitle.style.width = '100%'
-          // 移除标题的所有 margin 和 padding，确保只有 paddingBottom 控制间距
           clonedTitle.style.margin = '0'
-          clonedTitle.style.marginTop = '0'
-          clonedTitle.style.marginBottom = '0'
           clonedTitle.style.padding = '0'
-          clonedTitle.style.paddingTop = '0'
-          clonedTitle.style.paddingBottom = '0'
-          // 设置 line-height 为 1，确保标题高度等于字体大小
           clonedTitle.style.lineHeight = '1'
-        }
-        
-        // 确保 header 正常显示，并设置标题和横线的间距为字体大小的一半
-        const clonedHeader = clonedDoc.querySelector('.header') as HTMLElement
-        if (clonedHeader) {
-          // 使用实际的 titleFontSize（从 ref 获取）
-          const titleHalfFontSize = titleFontSize.value / 2
-          
-          clonedHeader.style.display = 'flex'
-          clonedHeader.style.justifyContent = 'center'
-          clonedHeader.style.alignItems = 'center'
-          clonedHeader.style.marginBottom = '0'
-          clonedHeader.style.paddingTop = '0' // 确保顶部没有额外间距
-          clonedHeader.style.paddingBottom = `${titleHalfFontSize}px` // 标题和横线的间距为字体大小的一半
         }
         
         // 设置 tier-list 的顶部间距
@@ -1166,40 +963,7 @@ async function handleExportPDF() {
           clonedTierList.style.marginTop = '0'
           clonedTierList.style.paddingTop = '0'
         }
-        
-        // 处理empty slot（与handleExportImage相同）
-        const emptySlots = clonedDoc.querySelectorAll('.tier-item.empty')
-        emptySlots.forEach((slot) => {
-          const slotElement = slot as HTMLElement
-          const tierRow = slotElement.parentElement
-          if (!tierRow) return
-          
-          const allItems = Array.from(tierRow.children) as HTMLElement[]
-          const hasItems = allItems.some(item => !item.classList.contains('empty'))
-          
-          if (hasItems) {
-            slotElement.style.display = 'none'
-          } else {
-            slotElement.style.width = '100px'
-            slotElement.style.height = '173px'
-            slotElement.style.minHeight = '173px'
-            slotElement.style.maxHeight = '173px'
-            slotElement.style.opacity = '0'
-            slotElement.style.pointerEvents = 'none'
-            slotElement.style.border = 'none'
-            slotElement.style.borderWidth = '0'
-            // 隐藏内部内容（占位符文字和图标）
-            const placeholder = slotElement.querySelector('.item-placeholder')
-            if (placeholder) {
-              (placeholder as HTMLElement).style.display = 'none'
-            }
-            const placeholderText = slotElement.querySelector('.placeholder-text')
-            if (placeholderText) {
-              (placeholderText as HTMLElement).style.display = 'none'
-            }
-          }
-        })
-      },
+      }
     })
     
     // 恢复滚动位置
@@ -1209,9 +973,9 @@ async function handleExportPDF() {
     // 注意：canvas 使用了 scale: 2，所以 canvas 尺寸是实际 DOM 的 2 倍
     const canvasWidth = canvas.width
     const canvasHeight = canvas.height
-    const htmlScale = 2 // html2canvas 的 scale 参数
-    const actualDomWidth = canvasWidth / htmlScale // 实际 DOM 宽度
-    const actualDomHeight = canvasHeight / htmlScale // 实际 DOM 高度
+    const htmlScaleForPDF = 2 // html2canvas 的 scale 参数
+    const actualDomWidth = canvasWidth / htmlScaleForPDF // 实际 DOM 宽度
+    const actualDomHeight = canvasHeight / htmlScaleForPDF // 实际 DOM 高度
     
     const pdfWidth = 210 // A4宽度（mm）
     const pdfHeight = (canvasHeight / canvasWidth) * pdfWidth // 按比例计算高度
@@ -1224,32 +988,26 @@ async function handleExportPDF() {
     })
     
     // 将canvas转换为图片并添加到PDF
-    const imgData = canvas.toDataURL('image/png', 1.0)
-    pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight, undefined, 'FAST')
+    // 使用 JPEG 压缩，显著减小 PDF 体积并提升生成速度
+    const imgData = canvas.toDataURL('image/jpeg', 0.9)
+    pdf.addImage(imgData, 'JPEG', 0, 0, pdfWidth, pdfHeight, undefined, 'FAST')
     
     // 为每个作品项添加超链接
-    // 需要将 DOM 坐标转换为 PDF 坐标（mm）
-    // rect 是基于实际 DOM 的像素坐标，需要转换为 canvas 坐标（考虑 scale），然后再转换为 PDF 坐标
-    const scaleX = pdfWidth / canvasWidth // PDF mm / canvas pixels
-    const scaleY = pdfHeight / canvasHeight // PDF mm / canvas pixels
+    // 重新计算比例: contentWidth 已经是 scale:2 之后的大小了
+    // 我们的 itemLinks.rect 是基于原始 DOM (scale:1) 的
+    const domWidth = canvasWidth / htmlScaleForPDF
+    const domHeight = canvasHeight / htmlScaleForPDF
+    const scaleX = pdfWidth / domWidth
+    const scaleY = pdfHeight / domHeight
     
-    itemLinks.forEach(({ url, rect, item }) => {
-      // rect 是基于实际 DOM 的像素坐标
-      // 转换为 canvas 坐标（考虑 scale: 2）
-      const canvasX = rect.left * htmlScale
-      const canvasY = rect.top * htmlScale
-      const canvasW = rect.width * htmlScale
-      const canvasH = rect.height * htmlScale
-      
-      // 转换为 PDF 坐标（mm）
-      const x = canvasX * scaleX
-      const y = canvasY * scaleY
-      const w = canvasW * scaleX
-      const h = canvasH * scaleY
-      
-      // 添加超链接
-      pdf.link(x, y, w, h, { url })
-      // console.log(`🔗 添加链接:`, item.name || item.id, url, `PDF坐标: (${x.toFixed(2)}, ${y.toFixed(2)}, ${w.toFixed(2)}, ${h.toFixed(2)})`)
+    itemLinks.forEach(({ url, rect }) => {
+      pdf.link(
+        rect.left * scaleX, 
+        rect.top * scaleY, 
+        rect.width * scaleX, 
+        rect.height * scaleY, 
+        { url }
+      )
     })
     
     // console.log(`📄 PDF尺寸: ${pdfWidth}x${pdfHeight}mm, Canvas尺寸: ${canvasWidth}x${canvasHeight}px (scale=${htmlScale})`)
@@ -1267,138 +1025,119 @@ async function handleExportPDF() {
 
 // 使用CORS代理获取图片（使用 wsrv.nl，专门用于图片处理，更稳定）
 function getCorsProxyUrl(url: string): string {
-  // wsrv.nl 是专门用于图片的代理服务，支持CORS，返回PNG格式
-  // 参数说明：
-  // - url: 原始图片URL
-  // - output=png: 输出PNG格式
-  // - n=-1: 不缓存（-1表示禁用缓存）
-  // - t=timestamp: 添加时间戳防止缓存
-  return `https://wsrv.nl/?url=${encodeURIComponent(url)}&output=png&n=-1&t=${Date.now()}`
+  if (!url) return ''
+  // 如果已经是 wsrv，直接返回
+  if (url.includes('wsrv.nl')) return url
+  
+  // 关键优化：移除 t=... 时间戳，允许浏览器缓存图片
+  // output=png 保证透明度和兼容性
+  return `https://wsrv.nl/?url=${encodeURIComponent(url)}&output=png`
 }
 
-// 从已加载的图片元素中获取base64（使用 wsrv.nl 代理）
-async function convertLoadedImageToBase64(img: HTMLImageElement): Promise<string | null> {
-  try {
-    // 获取原始URL
-    const originalUrl = img.getAttribute('data-original-src') || img.src
+// 核心逻辑：根据 3:4 (0.75) 比例智能调整裁剪位置
+// s > 0.75 (宽图/标准图): 居中 (center center)
+// s < 0.75 (长图): 保留顶部 (center top)
+// 统一处理所有图片（包括角色和bangumi），使用相同的裁剪规则
+function applySmartCropToImage(img: HTMLImageElement) {
+  // 必须有宽高才能计算，如果没有加载完则忽略
+  if (img.naturalWidth && img.naturalHeight) {
+    const ratio = img.naturalWidth / img.naturalHeight
+    const targetRatio = 0.75
     
-    // 如果已经是base64或blob，直接返回
-    if (originalUrl.startsWith('data:') || originalUrl.startsWith('blob:')) {
-      return originalUrl
-    }
+    img.style.objectFit = 'cover' // 确保填满
+    img.style.width = '100px'
+    img.style.height = '133px'
     
-    // 使用 wsrv.nl 代理加载图片（类似 anime-role-grid 的方法）
-    try {
-      const proxyUrl = getCorsProxyUrl(originalUrl)
-      
-      // 使用 Image 对象加载代理后的图片
-      return new Promise<string>((resolve, reject) => {
-        const proxyImg = new Image()
-        proxyImg.crossOrigin = 'anonymous'
-        proxyImg.referrerPolicy = 'no-referrer'
-        
-        proxyImg.onload = async () => {
-          try {
-            // 等待图片解码
-            await proxyImg.decode()
-            
-            // 验证图片尺寸
-            if (proxyImg.naturalWidth === 0 || proxyImg.naturalHeight === 0) {
-              reject(new Error('图片尺寸为0'))
-              return
-            }
-            
-            // 绘制到canvas并转换为base64
-            const canvas = document.createElement('canvas')
-            canvas.width = proxyImg.naturalWidth
-            canvas.height = proxyImg.naturalHeight
-            const ctx = canvas.getContext('2d')
-            
-            if (!ctx) {
-              reject(new Error('无法创建canvas上下文'))
-              return
-            }
-            
-            ctx.drawImage(proxyImg, 0, 0)
-            const dataUrl = canvas.toDataURL('image/png')
-            resolve(dataUrl)
-          } catch (error) {
-            reject(error)
-          }
-        }
-        
-        proxyImg.onerror = () => {
-          reject(new Error('图片加载失败'))
-        }
-        
-        proxyImg.src = proxyUrl
-      })
-    } catch (proxyError) {
-      console.warn('wsrv.nl 代理方法失败:', proxyError)
-      return null
+    if (ratio < targetRatio) {
+      // 场景：长图 (如 9:16) -> 靠上裁剪，保留头部
+      img.style.objectPosition = 'center top'
+    } else {
+      // 场景：宽图 (如 16:9, 1:1, 4:3) -> 居中裁剪
+      img.style.objectPosition = 'center center'
     }
-  } catch (error) {
-    console.warn('从已加载图片获取base64失败:', error)
-    return null
   }
 }
 
-// 将图片URL转换为base64（用于导出，使用 wsrv.nl 代理）
-async function convertImageToBase64ForExport(imageUrl: string): Promise<string | null> {
-  if (!imageUrl || imageUrl.startsWith('data:') || imageUrl.startsWith('blob:')) {
-    return imageUrl // 如果已经是base64或blob，直接返回
+// 使用canvas手动裁剪图片（用于导出，确保html2canvas正确渲染）
+// 统一处理所有图片（包括角色和bangumi），使用相同的裁剪规则
+async function cropImageWithCanvas(img: HTMLImageElement): Promise<string | null> {
+  // 必须有宽高才能计算
+  if (!img.naturalWidth || !img.naturalHeight) {
+    return null
   }
   
+  const naturalWidth = img.naturalWidth
+  const naturalHeight = img.naturalHeight
+  const naturalAspectRatio = naturalWidth / naturalHeight
+  const targetAspectRatio = 0.75 // 3/4
+  const containerWidth = 100
+  const containerHeight = 133
+  
+  // 计算裁剪区域
+  // 原理：先按目标尺寸等比缩放，然后从原图中裁剪对应区域
+  let sourceX = 0
+  let sourceY = 0
+  let sourceWidth = naturalWidth
+  let sourceHeight = naturalHeight
+  
+  if (naturalAspectRatio > targetAspectRatio) {
+    // s > 0.75：图片较宽
+    // 1. 等比缩放使高度对齐133px
+    //    缩放比例 = 133 / naturalHeight
+    //    缩放后的宽度 = naturalWidth * (133 / naturalHeight) > 100px
+    // 2. 需要从原图中裁剪出对应100px的部分（居中）
+    //    原图中对应100px的宽度 = 100 / (133 / naturalHeight) = 100 * naturalHeight / 133
+    const scaleByHeight = containerHeight / naturalHeight
+    const targetWidthInOriginal = containerWidth / scaleByHeight
+    sourceWidth = targetWidthInOriginal
+    sourceX = (naturalWidth - sourceWidth) / 2 // 居中裁剪
+    sourceY = 0
+    sourceHeight = naturalHeight
+  } else {
+    // s < 0.75：图片较高
+    // 1. 等比缩放使宽度对齐100px
+    //    缩放比例 = 100 / naturalWidth
+    //    缩放后的高度 = naturalHeight * (100 / naturalWidth) > 133px
+    // 2. 需要从原图中裁剪出对应133px的部分（保留顶部）
+    //    原图中对应133px的高度 = 133 / (100 / naturalWidth) = 133 * naturalWidth / 100
+    const scaleByWidth = containerWidth / naturalWidth
+    const targetHeightInOriginal = containerHeight / scaleByWidth
+    sourceX = 0
+    sourceY = 0 // 保留顶部
+    sourceWidth = naturalWidth
+    sourceHeight = targetHeightInOriginal
+  }
+  
+  // 使用canvas裁剪图片
   try {
-    // 使用 wsrv.nl 代理加载图片（类似 anime-role-grid 的方法）
-    const proxyUrl = getCorsProxyUrl(imageUrl)
+    const canvas = document.createElement('canvas')
+    canvas.width = containerWidth
+    canvas.height = containerHeight
+    const ctx = canvas.getContext('2d')
     
-    return new Promise<string>((resolve, reject) => {
-      const img = new Image()
-      img.crossOrigin = 'anonymous'
-      img.referrerPolicy = 'no-referrer'
-      
-      img.onload = async () => {
-        try {
-          // 等待图片解码
-          await img.decode()
-          
-          // 验证图片尺寸
-          if (img.naturalWidth === 0 || img.naturalHeight === 0) {
-            reject(new Error('图片尺寸为0'))
-            return
-          }
-          
-          // 绘制到canvas并转换为base64
-          const canvas = document.createElement('canvas')
-          canvas.width = img.naturalWidth
-          canvas.height = img.naturalHeight
-          const ctx = canvas.getContext('2d')
-          
-          if (!ctx) {
-            reject(new Error('无法创建canvas上下文'))
-            return
-          }
-          
-          ctx.drawImage(img, 0, 0)
-          const dataUrl = canvas.toDataURL('image/png')
-          resolve(dataUrl)
-        } catch (error) {
-          reject(error)
-        }
-      }
-      
-      img.onerror = () => {
-        reject(new Error('图片加载失败'))
-      }
-      
-      img.src = proxyUrl
-    })
+    if (!ctx) {
+      return null
+    }
+    
+    ctx.imageSmoothingEnabled = true
+    ctx.imageSmoothingQuality = 'high'
+    
+    // 绘制裁剪后的图片
+    // 从原图中裁剪出指定区域，然后缩放到目标尺寸
+    ctx.drawImage(
+      img,
+      Math.round(sourceX), Math.round(sourceY), Math.round(sourceWidth), Math.round(sourceHeight),
+      0, 0, containerWidth, containerHeight
+    )
+    
+    // 返回裁剪后的base64
+    return canvas.toDataURL('image/png', 1.0)
   } catch (error) {
-    console.warn('图片转换失败:', imageUrl, error)
+    console.error('裁剪图片失败:', error)
     return null
   }
 }
+
 
 </script>
 
