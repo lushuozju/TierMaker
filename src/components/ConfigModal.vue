@@ -12,7 +12,6 @@ const emit = defineEmits<{
   update: [configs: TierConfig[]]
   'update-title-font-size': [fontSize: number]
   'update-theme': [theme: 'light' | 'dark' | 'auto']
-  'clear-all': []
 }>()
 
 const localConfigs = ref<TierConfig[]>([])
@@ -22,7 +21,6 @@ const themePreference = ref<'light' | 'dark' | 'auto'>('auto')
 const inputValues = ref<Record<number, string>>({})
 const modalContentRef = ref<HTMLElement | null>(null)
 const mouseDownInside = ref(false)
-const showClearConfirm = ref(false)
 
 // 预设颜色选项
 const presetColors = [
@@ -168,20 +166,6 @@ function handleTierIdBlur(config: TierConfig, index: number) {
   config.id = newValue
   config.label = newValue
 }
-
-function handleClearClick() {
-  showClearConfirm.value = true
-}
-
-function handleConfirmClear() {
-  showClearConfirm.value = false
-  emit('clear-all')
-  emit('close')
-}
-
-function handleCancelClear() {
-  showClearConfirm.value = false
-}
 </script>
 
 <template>
@@ -207,7 +191,6 @@ function handleCancelClear() {
             class="config-input"
             style="max-width: 120px;"
           />
-          <button class="btn btn-danger" @click="handleClearClick">清空所有数据</button>
         </div>
         <div class="config-item-row" style="margin-top: 15px;">
           <label for="theme-preference">主题模式:</label>
@@ -331,30 +314,6 @@ function handleCancelClear() {
           <button class="btn btn-cancel" @click="emit('close')">取消</button>
           <button class="btn btn-save" @click="handleSave">保存</button>
         </div>
-      </div>
-    </div>
-  </div>
-  
-  <!-- 确认弹窗 -->
-  <div v-if="showClearConfirm" class="confirm-overlay" @click.self="handleCancelClear">
-    <div class="confirm-modal">
-      <div class="confirm-header">
-        <h3 class="confirm-title">⚠️ 警告</h3>
-      </div>
-      <div class="confirm-body">
-        <p>您确定要清空所有数据吗？</p>
-        <p class="confirm-warning">此操作将删除：</p>
-        <ul class="confirm-list">
-          <li>所有已添加的作品</li>
-          <li>所有评分等级配置</li>
-          <li>标题和字体大小设置</li>
-          <li>搜索历史记录</li>
-        </ul>
-        <p class="confirm-danger">此操作不可恢复！</p>
-      </div>
-      <div class="confirm-footer">
-        <button class="btn btn-cancel" @click="handleCancelClear">取消</button>
-        <button class="btn btn-danger-confirm" @click="handleConfirmClear">确认清空</button>
       </div>
     </div>
   </div>
@@ -752,91 +711,5 @@ function handleCancelClear() {
   color: #ffffff;
 }
 
-.confirm-overlay {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: var(--modal-overlay);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 2000;
-}
-
-.confirm-modal {
-  background: var(--bg-color);
-  border: 3px solid var(--border-color);
-  width: 90%;
-  max-width: 500px;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
-}
-
-.confirm-header {
-  padding: 20px;
-  border-bottom: 2px solid var(--border-color);
-  background: var(--warning-bg);
-}
-
-.confirm-title {
-  font-size: 20px;
-  font-weight: bold;
-  margin: 0;
-  color: #cc6666;
-}
-
-.confirm-body {
-  padding: 20px;
-}
-
-.confirm-body p {
-  margin: 10px 0;
-  line-height: 1.6;
-  color: var(--text-color);
-}
-
-.confirm-warning {
-  font-weight: bold;
-  color: var(--text-secondary);
-  margin-top: 15px !important;
-}
-
-.confirm-danger {
-  font-weight: bold;
-  color: #cc6666;
-  font-size: 16px;
-  margin-top: 15px !important;
-}
-
-.confirm-list {
-  margin: 10px 0;
-  padding-left: 25px;
-  line-height: 1.8;
-  color: var(--text-color);
-}
-
-.confirm-list li {
-  margin: 5px 0;
-}
-
-.confirm-footer {
-  padding: 20px;
-  border-top: 2px solid var(--border-color);
-  display: flex;
-  justify-content: flex-end;
-  gap: 10px;
-}
-
-.btn-danger-confirm {
-  background: #cc6666;
-  color: #ffffff;
-  border-color: #cc6666;
-}
-
-.btn-danger-confirm:hover {
-  background: #b85555;
-  border-color: #b85555;
-}
 </style>
 

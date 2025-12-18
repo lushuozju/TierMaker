@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, watch, nextTick, computed } from 'vue'
+import { ref, onMounted, onUnmounted, watch, nextTick, computed } from 'vue'
 import html2canvas from 'html2canvas'
 import { jsPDF } from 'jspdf'
 import TierList from './components/TierList.vue'
@@ -106,8 +106,19 @@ function initTheme() {
   }
 }
 
+// 点击外部关闭导出菜单
+function handleClickOutside(event: MouseEvent) {
+  const target = event.target as HTMLElement
+  if (!target.closest('.export-menu-container')) {
+    showExportMenu.value = false
+  }
+}
+
 // 加载数据
 onMounted(() => {
+  // 监听点击事件，用于关闭导出菜单
+  document.addEventListener('click', handleClickOutside)
+  
   initTheme()
   title.value = loadTitle()
   titleFontSize.value = loadTitleFontSize()
@@ -149,6 +160,11 @@ onMounted(() => {
   
   // 保存同步后的数据
   saveTierData(tiers.value)
+})
+
+// 清理事件监听
+onUnmounted(() => {
+  document.removeEventListener('click', handleClickOutside)
 })
 
 // 监听数据变化，自动保存
@@ -431,6 +447,8 @@ const isEditingTitle = ref(false)
 const appContentRef = ref<HTMLElement | null>(null)
 const isExportingImage = ref(false)
 const isExportingPDF = ref(false)
+const showExportMenu = ref(false)
+const showClearConfirm = ref(false)
 
 function handleTitleInput(e: Event) {
   const target = e.target as HTMLHeadingElement
@@ -469,8 +487,8 @@ watch(title, (newTitle) => {
   }
 })
 
-// 导出数据
-function handleExport() {
+// 导出数据（JSON）
+function handleExportJSON() {
   try {
     const data = exportAllData()
     const jsonStr = JSON.stringify(data, null, 2)
@@ -483,10 +501,39 @@ function handleExport() {
     a.click()
     document.body.removeChild(a)
     URL.revokeObjectURL(url)
+    showExportMenu.value = false
   } catch (error) {
     console.error('导出失败:', error)
     alert('导出失败，请重试')
   }
+}
+
+// 处理导出菜单点击
+function handleExportClick(type: 'image' | 'pdf' | 'json') {
+  if (type === 'image') {
+    handleExportImage()
+  } else if (type === 'pdf') {
+    handleExportPDF()
+  } else if (type === 'json') {
+    handleExportJSON()
+  }
+  showExportMenu.value = false
+}
+
+// 处理清空数据点击
+function handleClearClick() {
+  showClearConfirm.value = true
+}
+
+// 确认清空数据
+function handleConfirmClear() {
+  showClearConfirm.value = false
+  handleClearAll()
+}
+
+// 取消清空数据
+function handleCancelClear() {
+  showClearConfirm.value = false
 }
 
 // 导入数据
@@ -1158,22 +1205,40 @@ async function cropImageWithCanvas(img: HTMLImageElement): Promise<string | null
         title="点击编辑标题"
       ></h1>
       <div class="header-actions">
-        <button 
-          class="btn btn-secondary" 
-          @click="handleExportImage" 
-          title="保存为高清图片"
-          :disabled="isExportingImage || isExportingPDF"
-        >
-          {{ isExportingImage ? '准备中...' : '保存图片' }}
-        </button>
-        <button 
-          class="btn btn-secondary" 
-          @click="handleExportPDF" 
-          title="保存为PDF（保留超链接）"
-          :disabled="isExportingImage || isExportingPDF"
-        >
-          {{ isExportingPDF ? '准备中...' : '保存PDF' }}
-        </button>
+        <div class="export-menu-container">
+          <button 
+            class="btn btn-secondary" 
+            :class="{ 'export-menu-open': showExportMenu }"
+            @click.stop="showExportMenu = !showExportMenu"
+            title="导出"
+            :disabled="isExportingImage || isExportingPDF"
+          >
+            {{ isExportingImage ? '准备中...' : isExportingPDF ? '准备中...' : '导出' }}
+            <span class="export-arrow">▼</span>
+          </button>
+          <div v-if="showExportMenu" class="export-menu" @click.stop>
+            <button 
+              class="export-menu-item" 
+              @click="handleExportClick('image')"
+              :disabled="isExportingImage || isExportingPDF"
+            >
+              图片
+            </button>
+            <button 
+              class="export-menu-item" 
+              @click="handleExportClick('pdf')"
+              :disabled="isExportingImage || isExportingPDF"
+            >
+              PDF
+            </button>
+            <button 
+              class="export-menu-item" 
+              @click="handleExportClick('json')"
+            >
+              JSON
+            </button>
+          </div>
+        </div>
         <button 
           v-if="isExportingImage || isExportingPDF" 
           class="btn btn-secondary" 
@@ -1181,9 +1246,6 @@ async function cropImageWithCanvas(img: HTMLImageElement): Promise<string | null
           title="停止保存"
         >
           停止保存
-        </button>
-        <button class="btn btn-secondary" @click="handleExport" title="导出数据">
-          导出
         </button>
         <button class="btn btn-secondary" @click="handleImportClick" title="导入数据">
           导入
@@ -1195,6 +1257,9 @@ async function cropImageWithCanvas(img: HTMLImageElement): Promise<string | null
           style="display: none"
           @change="handleFileImport"
         />
+        <button class="btn btn-danger" @click="handleClearClick" title="清空所有数据">
+          清空数据
+        </button>
         <button class="btn btn-secondary" @click="showConfig = true">
           设置
         </button>
@@ -1232,8 +1297,31 @@ async function cropImageWithCanvas(img: HTMLImageElement): Promise<string | null
       @update="handleUpdateConfigs"
       @update-title-font-size="handleUpdateTitleFontSize"
       @update-theme="handleUpdateTheme"
-      @clear-all="handleClearAll"
     />
+    
+    <!-- 清空数据确认弹窗 -->
+    <div v-if="showClearConfirm" class="confirm-overlay" @click.self="handleCancelClear">
+      <div class="confirm-modal">
+        <div class="confirm-header">
+          <h3 class="confirm-title">⚠️ 警告</h3>
+        </div>
+        <div class="confirm-body">
+          <p>您确定要清空所有数据吗？</p>
+          <p class="confirm-warning">此操作将删除：</p>
+          <ul class="confirm-list">
+            <li>所有已添加的作品</li>
+            <li>所有评分等级配置</li>
+            <li>标题和字体大小设置</li>
+            <li>搜索历史记录</li>
+          </ul>
+          <p class="confirm-danger">此操作不可恢复！</p>
+        </div>
+        <div class="confirm-footer">
+          <button class="btn btn-cancel" @click="handleCancelClear">取消</button>
+          <button class="btn btn-danger-confirm" @click="handleConfirmClear">确认清空</button>
+        </div>
+      </div>
+    </div>
 
     <EditItemModal
       v-if="showEditItem"
@@ -1321,6 +1409,171 @@ async function cropImageWithCanvas(img: HTMLImageElement): Promise<string | null
 .btn:disabled:hover {
   background: var(--bg-color);
   color: var(--text-color);
+}
+
+.btn-danger {
+  background: var(--bg-color);
+  color: #cc6666;
+  border-color: #cc6666;
+}
+
+.btn-danger:hover {
+  background: #cc6666;
+  color: #ffffff;
+}
+
+.export-menu-container {
+  position: relative;
+}
+
+.export-menu {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  margin-top: 5px;
+  background: var(--bg-color);
+  border: 2px solid var(--border-color);
+  border-radius: 4px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  z-index: 1000;
+  min-width: 120px;
+  display: flex;
+  flex-direction: column;
+}
+
+.export-menu-item {
+  padding: 10px 20px;
+  border: none;
+  background: var(--bg-color);
+  color: var(--text-color);
+  font-size: 14px;
+  font-weight: bold;
+  cursor: pointer;
+  transition: all 0.2s;
+  text-align: left;
+  border-bottom: 1px solid var(--border-light-color);
+}
+
+.export-menu-item:last-child {
+  border-bottom: none;
+}
+
+.export-menu-item:hover:not(:disabled) {
+  background: var(--border-color);
+  color: var(--bg-color);
+}
+
+.export-menu-item:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.export-arrow {
+  margin-left: 5px;
+  font-size: 10px;
+  display: inline-block;
+  transition: transform 0.2s;
+}
+
+.export-menu-open .export-arrow {
+  transform: rotate(180deg);
+}
+
+.confirm-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: var(--modal-overlay);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2000;
+}
+
+.confirm-modal {
+  background: var(--bg-color);
+  border: 3px solid var(--border-color);
+  width: 90%;
+  max-width: 500px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+}
+
+.confirm-header {
+  padding: 20px;
+  border-bottom: 2px solid var(--border-color);
+  background: var(--warning-bg, #fff3cd);
+}
+
+.confirm-title {
+  font-size: 20px;
+  font-weight: bold;
+  margin: 0;
+  color: #cc6666;
+}
+
+.confirm-body {
+  padding: 20px;
+}
+
+.confirm-body p {
+  margin: 10px 0;
+  line-height: 1.6;
+  color: var(--text-color);
+}
+
+.confirm-warning {
+  font-weight: bold;
+  color: var(--text-secondary);
+  margin-top: 15px !important;
+}
+
+.confirm-danger {
+  font-weight: bold;
+  color: #cc6666;
+  font-size: 16px;
+  margin-top: 15px !important;
+}
+
+.confirm-list {
+  margin: 10px 0;
+  padding-left: 25px;
+  line-height: 1.8;
+  color: var(--text-color);
+}
+
+.confirm-list li {
+  margin: 5px 0;
+}
+
+.confirm-footer {
+  padding: 20px;
+  border-top: 2px solid var(--border-color);
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.btn-cancel {
+  background: var(--bg-color);
+  color: var(--text-color);
+  border: 2px solid var(--border-color);
+}
+
+.btn-cancel:hover {
+  background: var(--bg-hover-color, var(--border-color));
+}
+
+.btn-danger-confirm {
+  background: #cc6666;
+  color: #ffffff;
+  border-color: #cc6666;
+}
+
+.btn-danger-confirm:hover {
+  background: #b85555;
+  border-color: #b85555;
 }
 </style>
 
