@@ -134,10 +134,18 @@ function applyTheme(theme: 'light' | 'dark' | 'auto') {
 }
 
 function handleThemeChange() {
-  // 立即应用主题变化，不需要等待保存
+  // 立即应用主题变化并保存
   applyTheme(themePreference.value)
+  saveThemePreference(themePreference.value)
+  emit('update-theme', themePreference.value)
 }
 
+function handleClose() {
+  // 关闭设置时，保存当前的主题设置（确保主题设置已保存）
+  saveThemePreference(themePreference.value)
+  emit('update-theme', themePreference.value)
+  emit('close')
+}
 
 function isInsideModalContent(x: number, y: number): boolean {
   if (!modalContentRef.value) return false
@@ -152,7 +160,8 @@ function handleMouseDown(event: MouseEvent) {
 function handleMouseUp(event: MouseEvent) {
   const mouseUpInside = isInsideModalContent(event.clientX, event.clientY)
   if (!mouseDownInside.value && !mouseUpInside) {
-    emit('close')
+    // 点击空白处退出时，保存当前的主题设置
+    handleClose()
   }
   mouseDownInside.value = false
 }
@@ -173,7 +182,7 @@ function handleTierIdBlur(config: TierConfig, index: number) {
     <div class="modal-content" ref="modalContentRef">
       <div class="modal-header">
         <h2 class="modal-title">设置</h2>
-        <button class="close-btn" @click="emit('close')">×</button>
+        <button class="close-btn" @click="handleClose">×</button>
       </div>
       
       <div class="modal-body">
@@ -311,7 +320,7 @@ function handleTierIdBlur(config: TierConfig, index: number) {
       <div class="modal-footer">
         <button class="add-btn" @click="addTier">添加等级</button>
         <div class="footer-actions">
-          <button class="btn btn-cancel" @click="emit('close')">取消</button>
+          <button class="btn btn-cancel" @click="handleClose">取消</button>
           <button class="btn btn-save" @click="handleSave">保存</button>
         </div>
       </div>

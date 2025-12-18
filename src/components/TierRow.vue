@@ -650,15 +650,21 @@ function getLongPressProgress(index: number): number {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(255, 255, 255, 0.9);
+  background: rgba(255, 255, 255, 0.7);
   z-index: 20;
   pointer-events: none;
   color: var(--border-color);
 }
 
+/* 根据 data-theme 属性设置背景色 - 深色模式 */
+[data-theme="dark"] .long-press-loader {
+  background: rgba(26, 26, 26, 0.7);
+}
+
+/* 当 data-theme="auto" 且系统为深色模式时 */
 @media (prefers-color-scheme: dark) {
-  .long-press-loader {
-    background: rgba(26, 26, 26, 0.9);
+  [data-theme="auto"] .long-press-loader {
+    background: rgba(26, 26, 26, 0.7);
   }
 }
 
