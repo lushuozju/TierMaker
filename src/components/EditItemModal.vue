@@ -20,7 +20,6 @@ const customUrl = ref('')
 const imageFile = ref<File | null>(null)
 const imagePreview = ref<string>('')
 const cropPosition = ref<CropPosition>('auto')
-const previewCropPosition = ref<CropPosition>('auto')
 const modalContentRef = ref<HTMLElement | null>(null)
 const mouseDownInside = ref(false)
 const hasHandledLongPressMouseUp = ref(false)
@@ -32,6 +31,26 @@ const cornerTopRightStyle = ref<{ [key: string]: string }>({ display: 'none' })
 const cornerBottomLeftStyle = ref<{ [key: string]: string }>({ display: 'none' })
 const cornerBottomRightStyle = ref<{ [key: string]: string }>({ display: 'none' })
 
+// 拖动相关状态
+const isDraggingMask = ref(false)
+const dragStartX = ref(0)
+const dragStartY = ref(0)
+const initialMaskLeft = ref(0)
+const initialMaskTop = ref(0)
+const maskElementRef = ref<HTMLElement | null>(null)
+
+// 存储图片位置信息，用于拖动时计算
+const imagePositionInfo = ref<{
+  imageLeft: number
+  imageTop: number
+  actualDisplayedWidth: number
+  actualDisplayedHeight: number
+  scale: number
+  naturalWidth: number
+  naturalHeight: number
+  naturalRatio: number
+} | null>(null)
+
 watch(() => props.item, (newItem) => {
   if (newItem) {
     name.value = newItem.name || ''
@@ -40,11 +59,21 @@ watch(() => props.item, (newItem) => {
     customUrl.value = newItem.url || ''
     imageFile.value = null
     imagePreview.value = newItem.image || ''
+    // 如果已有自定义坐标，直接使用；否则初始化为 'auto'（会在 updatePreviewCrop 中计算默认位置）
     cropPosition.value = newItem.cropPosition || 'auto'
-    previewCropPosition.value = newItem.cropPosition || 'auto'
     // 更新预览图片的裁剪位置
     nextTick(() => {
       updatePreviewCrop()
+      // 检查遮罩框元素是否存在
+      if (maskElementRef.value) {
+        console.log('✅ 遮罩框元素已挂载', maskElementRef.value)
+        // 测试事件绑定
+        maskElementRef.value.addEventListener('click', () => {
+          console.log('✅ 遮罩框点击事件触发')
+        })
+      } else {
+        console.warn('❌ 遮罩框元素未找到')
+      }
     })
   }
 }, { immediate: true })
@@ -67,8 +96,8 @@ function updatePreviewCrop() {
   const previewWidth = 100
   const previewHeight = 133
   
-  // 确定裁剪位置
-  let cropPos = previewCropPosition.value
+  // 确定裁剪位置（使用 cropPosition，不再使用 previewCropPosition）
+  let cropPos = cropPosition.value
   if (cropPos === 'auto') {
     // 自动模式：根据图片宽高比决定
     if (naturalRatio < targetRatio) {
@@ -133,6 +162,18 @@ function updatePreviewCrop() {
     const imageLeft = imgElementLeft + imageContentLeftInImg
     const imageTop = imgElementTop + imageContentTopInImg
     
+    // 保存图片位置信息，用于拖动时计算
+    imagePositionInfo.value = {
+      imageLeft,
+      imageTop,
+      actualDisplayedWidth,
+      actualDisplayedHeight,
+      scale,
+      naturalWidth,
+      naturalHeight,
+      naturalRatio,
+    }
+    
     // ✅ 使用与实际裁剪完全相同的逻辑计算裁剪区域（像素级精确）
     // 目标尺寸：100px × 133px (3:4 比例)
     const containerWidth = 100
@@ -144,7 +185,13 @@ function updatePreviewCrop() {
     let sourceWidth = naturalWidth
     let sourceHeight = naturalHeight
     
-    if (naturalRatio > targetAspectRatio) {
+    // ✅ 如果裁剪位置是自定义坐标对象，直接使用
+    if (typeof cropPos === 'object' && cropPos !== null && 'sourceX' in cropPos) {
+      sourceX = cropPos.sourceX
+      sourceY = cropPos.sourceY
+      sourceWidth = cropPos.sourceWidth
+      sourceHeight = cropPos.sourceHeight
+    } else if (naturalRatio > targetAspectRatio) {
       // s > 0.75：图片较宽
       // 需要从原图中裁剪出对应100px的部分
       // 放缩图片让高度恰好等于作品框高度，然后对宽度居中截取
@@ -242,6 +289,7 @@ function updatePreviewCrop() {
         100% 100%,
         100% 0%
       )`,
+      pointerEvents: 'none', // 确保遮罩层不阻止鼠标事件
     }
     
     // ✅ 设置四个顶点的红色标记点（用于检测图片位置）
@@ -304,12 +352,7 @@ function updatePreviewCrop() {
   })
 }
 
-// 监听裁剪位置变化
-watch(previewCropPosition, () => {
-  nextTick(() => {
-    updatePreviewCrop()
-  })
-})
+// 移除裁剪位置选择器的 watch，现在只通过拖动来设置裁剪位置
 
 // 监听图片预览变化
 watch(imagePreview, () => {
@@ -404,17 +447,24 @@ function handleSave() {
     finalUrl = originalUrl || ''
   }
   
+  const finalCropPosition = cropPosition.value === 'auto' ? undefined : cropPosition.value
+  
+  console.log('💾 保存item:', {
+    itemId: props.item?.id,
+    cropPosition: finalCropPosition,
+    cropPositionType: typeof finalCropPosition,
+    isObject: typeof finalCropPosition === 'object' && finalCropPosition !== null
+  })
+  
   const updatedItem: AnimeItem = {
     ...props.item,
     name: name.value.trim() || props.item.name,
     name_cn: nameCn.value.trim() || undefined,
     image: finalImageUrl,
     url: finalUrl,
-    // 保存原始默认值（如果是旧数据，现在也会被设置）
     originalUrl: originalUrl,
     originalImage: originalImage,
-    // 保存裁剪位置（如果为 auto 则不保存，使用默认行为）
-    cropPosition: cropPosition.value === 'auto' ? undefined : cropPosition.value,
+    cropPosition: finalCropPosition,
   }
   
   emit('save', updatedItem)
@@ -435,6 +485,11 @@ function isInsideModalContent(x: number, y: number): boolean {
 }
 
 function handleMouseDown(event: MouseEvent) {
+  // 如果点击的是遮罩框，不处理（让遮罩框自己处理）
+  const target = event.target as HTMLElement
+  if (target && target.classList.contains('image-preview-mask')) {
+    return
+  }
   mouseDownInside.value = isInsideModalContent(event.clientX, event.clientY)
 }
 
@@ -451,6 +506,206 @@ function handleMouseUp(event: MouseEvent) {
     emit('close')
   }
   mouseDownInside.value = false
+}
+
+// 拖动遮罩框相关函数
+function handleMaskMouseDown(event: MouseEvent) {
+  console.log('handleMaskMouseDown 被调用', {
+    hasImagePositionInfo: !!imagePositionInfo.value,
+    hasMaskElement: !!maskElementRef.value,
+    eventTarget: event.target
+  })
+  
+  if (!imagePositionInfo.value || !maskElementRef.value) {
+    console.warn('拖动失败：缺少必要信息')
+    return
+  }
+  
+  event.preventDefault()
+  event.stopPropagation()
+  
+  console.log('开始拖动遮罩框')
+  isDraggingMask.value = true
+  dragStartX.value = event.clientX
+  dragStartY.value = event.clientY
+  
+  const container = maskElementRef.value.parentElement
+  if (!container) return
+  
+  const containerRect = container.getBoundingClientRect()
+  const originX = containerRect.left + container.clientLeft
+  const originY = containerRect.top + container.clientTop
+  
+  const maskRect = maskElementRef.value.getBoundingClientRect()
+  initialMaskLeft.value = maskRect.left - originX
+  initialMaskTop.value = maskRect.top - originY
+  
+  document.addEventListener('mousemove', handleMaskMouseMove)
+  document.addEventListener('mouseup', handleMaskMouseUp)
+}
+
+function handleMaskMouseMove(event: MouseEvent) {
+  if (!isDraggingMask.value || !imagePositionInfo.value || !maskElementRef.value) return
+  
+  event.preventDefault()
+  
+  const container = maskElementRef.value.parentElement
+  if (!container) return
+  
+  const containerRect = container.getBoundingClientRect()
+  const originX = containerRect.left + container.clientLeft
+  const originY = containerRect.top + container.clientTop
+  
+  // 计算新的位置
+  const deltaX = event.clientX - dragStartX.value
+  const deltaY = event.clientY - dragStartY.value
+  
+  const newMaskLeft = initialMaskLeft.value + deltaX
+  const newMaskTop = initialMaskTop.value + deltaY
+  
+  // 限制在图片范围内
+  const { imageLeft, imageTop, actualDisplayedWidth, actualDisplayedHeight } = imagePositionInfo.value
+  const maskWidth = parseFloat(previewMaskStyle.value.width || '0')
+  const maskHeight = parseFloat(previewMaskStyle.value.height || '0')
+  
+  const clampedLeft = Math.max(imageLeft, Math.min(newMaskLeft, imageLeft + actualDisplayedWidth - maskWidth))
+  const clampedTop = Math.max(imageTop, Math.min(newMaskTop, imageTop + actualDisplayedHeight - maskHeight))
+  
+  // 更新白框位置
+  const dpr = window.devicePixelRatio || 1
+  const snap = (v: number) => Math.round(v * dpr) / dpr
+  
+  const snappedLeft = snap(clampedLeft)
+  const snappedTop = snap(clampedTop)
+  
+  previewMaskStyle.value = {
+    ...previewMaskStyle.value,
+    left: `${snappedLeft}px`,
+    top: `${snappedTop}px`,
+  }
+  
+  // 根据新位置计算裁剪位置（使用snap后的位置，与显示一致）
+  updateCropPositionFromMask(snappedLeft, snappedTop)
+  
+  // 更新遮罩层
+  updateOverlayFromMask(clampedLeft, clampedTop, maskWidth, maskHeight)
+}
+
+function handleMaskMouseUp(event: MouseEvent) {
+  if (!isDraggingMask.value) return
+  
+  isDraggingMask.value = false
+  document.removeEventListener('mousemove', handleMaskMouseMove)
+  document.removeEventListener('mouseup', handleMaskMouseUp)
+}
+
+// 根据遮罩框位置计算裁剪位置（保存精确的自定义坐标）
+function updateCropPositionFromMask(maskLeft: number, maskTop: number) {
+  if (!imagePositionInfo.value) return
+  
+  const { imageLeft, imageTop, scale, naturalWidth, naturalHeight, naturalRatio } = imagePositionInfo.value
+  
+  // maskLeft 和 maskTop 是白框的绝对位置（相对于容器，已经经过snap处理）
+  // 在 updatePreviewCrop 中：
+  // - highlightLeft = sourceX * scale（高亮区域在图片内的相对位置）
+  // - maskLeft = Math.max(0, highlightLeft - expandUnit)（白框在图片内的相对位置）
+  // - maskLeftSnapped = snap(imageLeft + maskLeft)（白框的绝对位置，经过snap处理）
+  // 
+  // 反向计算：
+  // - maskLeftRelative = maskLeft - imageLeft（白框在图片内的相对位置，可能被Math.max限制）
+  // - highlightLeft = maskLeftRelative + expandUnit（恢复高亮区域位置）
+  const expandUnit = 1
+  const maskLeftRelative = maskLeft - imageLeft // 白框在图片内的相对位置
+  const maskTopRelative = maskTop - imageTop
+  
+  // 恢复高亮区域位置
+  // 注意：maskLeft 可能被 Math.max(0, ...) 限制，所以 maskLeftRelative 可能小于实际的 highlightLeft - expandUnit
+  // 但通常 expandUnit 很小（1px），所以这个误差可以接受
+  const highlightLeft = maskLeftRelative + expandUnit
+  const highlightTop = maskTopRelative + expandUnit
+  
+  // 转换为原图坐标
+  const sourceX = highlightLeft / scale
+  const sourceY = highlightTop / scale
+  
+  console.log('🔍 坐标转换:', {
+    maskLeft,
+    maskTop,
+    imageLeft,
+    imageTop,
+    highlightLeft,
+    highlightTop,
+    scale,
+    sourceX,
+    sourceY,
+    naturalWidth,
+    naturalHeight
+  })
+  
+  // 计算目标尺寸
+  const containerWidth = 100
+  const containerHeight = 133
+  const targetAspectRatio = 0.75
+  
+  let sourceWidth = 0
+  let sourceHeight = 0
+  
+  if (naturalRatio > targetAspectRatio) {
+    // 图片较宽
+    const scaleByHeight = containerHeight / naturalHeight
+    sourceWidth = containerWidth / scaleByHeight
+    sourceHeight = naturalHeight
+  } else {
+    // 图片较高
+    const scaleByWidth = containerWidth / naturalWidth
+    sourceWidth = naturalWidth
+    sourceHeight = containerHeight / scaleByWidth
+  }
+  
+  const customCropPosition = {
+    sourceX: Math.max(0, Math.min(sourceX, naturalWidth - sourceWidth)),
+    sourceY: Math.max(0, Math.min(sourceY, naturalHeight - sourceHeight)),
+    sourceWidth: sourceWidth,
+    sourceHeight: sourceHeight,
+  }
+  
+  cropPosition.value = customCropPosition
+  
+  console.log('✅ 更新裁剪位置:', {
+    itemId: props.item?.id,
+    cropPosition: customCropPosition
+  })
+}
+
+// 根据遮罩框位置更新遮罩层
+function updateOverlayFromMask(maskLeft: number, maskTop: number, maskWidth: number, maskHeight: number) {
+  const container = maskElementRef.value?.parentElement
+  if (!container) return
+  
+  const containerRect = container.getBoundingClientRect()
+  const containerContentWidth = containerRect.width - container.clientLeft * 2
+  const containerContentHeight = containerRect.height - container.clientTop * 2
+  
+  const maskLeftPercent = (maskLeft / containerContentWidth) * 100
+  const maskTopPercent = (maskTop / containerContentHeight) * 100
+  const maskRightPercent = ((maskLeft + maskWidth) / containerContentWidth) * 100
+  const maskBottomPercent = ((maskTop + maskHeight) / containerContentHeight) * 100
+  
+  overlayStyle.value = {
+    clipPath: `polygon(
+      0% 0%,
+      0% 100%,
+      ${maskLeftPercent}% 100%,
+      ${maskLeftPercent}% ${maskTopPercent}%,
+      ${maskRightPercent}% ${maskTopPercent}%,
+      ${maskRightPercent}% ${maskBottomPercent}%,
+      ${maskLeftPercent}% ${maskBottomPercent}%,
+      ${maskLeftPercent}% 100%,
+      100% 100%,
+      100% 0%
+    )`,
+    pointerEvents: 'none', // 确保遮罩层不阻止鼠标事件
+  }
 }
 </script>
 
@@ -499,36 +754,26 @@ function handleMouseUp(event: MouseEvent) {
             />
             <!-- 遮罩层：将白框外的部分加暗，突出选中区域 -->
             <div class="image-preview-overlay" :style="overlayStyle"></div>
+            <!-- 预览区域（白色框框选的部分就是预览结果，可拖动） -->
+            <div 
+              class="image-preview-mask" 
+              :style="previewMaskStyle"
+              ref="maskElementRef"
+              @mousedown.stop.prevent="handleMaskMouseDown"
+            ></div>
             <!-- 四个顶点红色标记点（用于检测图片位置） -->
             <div class="image-corner-marker" :style="cornerTopLeftStyle"></div>
             <div class="image-corner-marker" :style="cornerTopRightStyle"></div>
             <div class="image-corner-marker" :style="cornerBottomLeftStyle"></div>
             <div class="image-corner-marker" :style="cornerBottomRightStyle"></div>
-            <!-- 预览区域（白色框框选的部分就是预览结果） -->
-            <div class="image-preview-mask" :style="previewMaskStyle"></div>
           </div>
           <div v-else class="image-placeholder">暂无图片</div>
         </div>
         
-        <!-- 裁剪位置设置 -->
+        <!-- 提示信息 -->
         <div class="form-group">
-          <label>裁剪位置</label>
-          <select
-            v-model="previewCropPosition"
-            class="form-input"
-            @change="cropPosition = previewCropPosition"
-            :disabled="!imagePreview"
-          >
-            <option value="auto">自动（根据图片比例）</option>
-            <option value="center top">顶部居中</option>
-            <option value="center center">中心</option>
-            <option value="center bottom">底部居中</option>
-            <option value="left center">左侧居中</option>
-            <option value="right center">右侧居中</option>
-          </select>
           <div class="form-hint">
-            选择图片在卡片中的显示位置。自动模式会根据图片宽高比智能选择。
-            <span v-if="!imagePreview" style="color: var(--text-secondary);">（请先设置图片）</span>
+            拖动白色框框可以调整裁剪位置
           </div>
         </div>
         
@@ -737,7 +982,7 @@ function handleMouseUp(event: MouseEvent) {
   height: 100%;
   background: rgba(0, 0, 0, 0.5);
   z-index: 1;
-  pointer-events: none;
+  pointer-events: none !important; /* 强制不阻止鼠标事件 */
 }
 
 .image-corner-marker {
@@ -751,9 +996,12 @@ function handleMouseUp(event: MouseEvent) {
   position: absolute;
   overflow: visible;
   border: 2px solid #ffffff;
-  z-index: 2;
+  z-index: 3;
   background: transparent;
-  pointer-events: none;
+  cursor: move !important; /* 强制显示拖动光标 */
+  pointer-events: auto !important; /* 强制允许鼠标事件 */
+  min-width: 20px; /* 确保有最小尺寸可以接收鼠标事件 */
+  min-height: 20px;
   /* 大小通过内联样式动态设置，保持3:4比例 */
 }
 

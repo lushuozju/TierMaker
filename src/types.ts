@@ -1,5 +1,12 @@
 // 图片裁剪位置类型
-export type CropPosition = 'auto' | 'center top' | 'center center' | 'center bottom' | 'left center' | 'right center'
+export type CropPosition =
+  | 'auto'
+  | 'center top'
+  | 'center center'
+  | 'center bottom'
+  | 'left center'
+  | 'right center'
+  | { sourceX: number; sourceY: number; sourceWidth: number; sourceHeight: number } // 自定义精确坐标
 
 // 动画/作品数据类型
 export interface AnimeItem {

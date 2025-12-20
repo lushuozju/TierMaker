@@ -1,10 +1,9 @@
 <script setup lang="ts">
 import { ref, watch, onMounted } from 'vue'
 import { searchBangumiAnime, searchBangumiCharacters } from '../utils/bangumi'
-import { searchVndbVisualNovel } from '../utils/vndb'
 import { generateDefaultUrl } from '../utils/url'
 import { saveLastSearchSource, loadLastSearchSource } from '../utils/storage'
-import type { AnimeItem, ApiSource, SearchResult, BgmCharacterSearchResult } from '../types'
+import type { AnimeItem, ApiSource, SearchResult } from '../types'
 
 const emit = defineEmits<{
   close: []
@@ -61,14 +60,10 @@ async function handleSearch() {
         hasMore.value = false
       }
     } else if (apiSource.value === 'character') {
-      data = await searchBangumiCharacters(keyword.value, 0, 10)
-      if (data.length < 10) {
+      data = await searchBangumiCharacters(keyword.value, 0, 20)
+      if (data.length < 20) {
         hasMore.value = false
       }
-    } else if (apiSource.value === 'vndb') {
-      const vndbResponse = await searchVndbVisualNovel(keyword.value, 1, 20)
-      data = vndbResponse.results
-      hasMore.value = vndbResponse.more
     }
     
     results.value = data
@@ -101,23 +96,13 @@ async function loadMore() {
         hasMore.value = false
       }
     } else if (apiSource.value === 'character') {
-      offset.value += 10
-      data = await searchBangumiCharacters(keyword.value, offset.value, 10)
+      offset.value += 20
+      data = await searchBangumiCharacters(keyword.value, offset.value, 20)
       if (data.length > 0) {
         results.value = [...results.value, ...data]
-        if (data.length < 10) {
+        if (data.length < 20) {
           hasMore.value = false
         }
-      } else {
-        hasMore.value = false
-      }
-    } else if (apiSource.value === 'vndb') {
-      page.value += 1
-      const vndbResponse = await searchVndbVisualNovel(keyword.value, page.value, 20)
-      data = vndbResponse.results
-      if (data.length > 0) {
-        results.value = [...results.value, ...data]
-        hasMore.value = vndbResponse.more
       } else {
         hasMore.value = false
       }
@@ -131,40 +116,21 @@ async function loadMore() {
 
 
 function handleSelect(result: SearchResult) {
-  // 检查是否为角色搜索结果
   const isCharacter = apiSource.value === 'character'
-  const characterResult = isCharacter ? result as BgmCharacterSearchResult : null
-  
-  // 获取图片 URL（按优先级）
-  let imageUrl = ''
-  if (characterResult) {
-    // 角色搜索结果：优先使用 large，然后是 medium，最后是 grid
-    // 确保与搜索页面显示的图片一致（搜索页面优先使用 large/medium）
-    imageUrl = characterResult.images?.large || characterResult.images?.medium || characterResult.images?.grid || characterResult.image || ''
-  } else {
-    // 作品搜索结果
-    const bgmResult = result as import('../types').BgmSearchResult | import('../types').VndbSearchResult
-    imageUrl = bgmResult.images?.large || bgmResult.images?.medium || bgmResult.images?.grid || bgmResult.images?.small || ''
-  }
-  
-  // 将 id 转换为字符串以便检查（BgmSearchResult 的 id 是 number）
-  const resultId = String(result.id)
-  
-  // 生成默认的 web 链接
+  const bgmResult = result as import('../types').BgmSearchResult
+  const imageUrl = bgmResult.images?.large || bgmResult.images?.medium || bgmResult.images?.grid || bgmResult.images?.small || ''
   const defaultUrl = generateDefaultUrl(result.id, isCharacter)
-  
-  // 对于角色，使用 character_ 前缀的 ID
   const itemId = isCharacter ? `character_${result.id}` : result.id
   
   const anime: AnimeItem = {
-    id: itemId, // 角色使用 character_ 前缀
-    name: characterResult?.nameCn || characterResult?.name || result.name,
-    name_cn: characterResult?.nameCn || (result as any).name_cn || undefined,
+    id: itemId,
+    name: (result as any).name_cn || result.name,
+    name_cn: (result as any).name_cn || undefined,
     image: imageUrl,
-    date: characterResult ? undefined : ((result as any).date || undefined),
-    score: characterResult ? undefined : ((result as any).score || undefined),
-    originalUrl: defaultUrl, // 保存默认 web 链接
-    originalImage: imageUrl, // 保存默认封面图链接
+    date: (result as any).date || undefined,
+    score: (result as any).score || undefined,
+    originalUrl: defaultUrl,
+    originalImage: imageUrl,
   }
   
   emit('select', anime)
@@ -197,8 +163,6 @@ function getPlaceholder() {
     return '输入动画名称...'
   } else if (apiSource.value === 'character') {
     return '输入角色名称...'
-  } else if (apiSource.value === 'vndb') {
-    return '输入视觉小说名称...'
   } else if (apiSource.value === 'local') {
     return '输入自定义标题...'
   }
@@ -210,8 +174,6 @@ function getTitle() {
     return '搜索动画'
   } else if (apiSource.value === 'character') {
     return '搜索角色'
-  } else if (apiSource.value === 'vndb') {
-    return '搜索视觉小说'
   } else if (apiSource.value === 'local') {
     return '本地上传'
   }
@@ -233,30 +195,11 @@ function getBgmTypeName(type?: number): string {
   return typeMap[type] || ''
 }
 
-// 获取结果显示信息（年份 + 类型，仅对 Bangumi）
 function getResultMeta(result: SearchResult): string {
   const parts: string[] = []
-  
-  // 角色搜索结果显示性别和人气
-  if (apiSource.value === 'character') {
-    const characterResult = result as BgmCharacterSearchResult
-    if (characterResult.gender && characterResult.gender !== '?') {
-      parts.push(characterResult.gender === 'male' ? '男' : characterResult.gender === 'female' ? '女' : characterResult.gender)
-    }
-    if (characterResult.popularity) {
-      parts.push(`人气: ${characterResult.popularity}`)
-    }
-    return parts.join(' · ')
-  }
-  
-  // 年份信息（角色搜索结果没有 date 字段）
-  // 使用类型断言，因为 apiSource 可能是 'character'（虽然类型定义中没有）
-  const isCharacterResult = (apiSource.value as string) === 'character'
-  if (!isCharacterResult && (result as any).date) {
+  if ((result as any).date) {
     parts.push((result as any).date.split('-')[0])
   }
-  
-  // 类型信息（仅对 Bangumi）
   if (apiSource.value === 'bangumi') {
     const bgmResult = result as import('../types').BgmSearchResult
     if (bgmResult.type) {
@@ -266,7 +209,6 @@ function getResultMeta(result: SearchResult): string {
       }
     }
   }
-  
   return parts.join(' · ')
 }
 
@@ -407,24 +349,9 @@ onMounted(() => {
   apiSource.value = lastSource
 })
 
-// 获取图片 URL，如果为空则返回占位图
 function getImageUrl(result: SearchResult): string {
-  // 检查是否为角色搜索结果
-  const isCharacter = apiSource.value === 'character'
-  const characterResult = isCharacter ? result as BgmCharacterSearchResult : null
-  
-  let url = ''
-  if (characterResult) {
-    // 角色搜索结果：优先使用 large，然后是 medium，最后是 grid
-    // large 和 medium 通常质量更好，避免使用 grid 导致图片太小而模糊
-    url = characterResult.images?.large || characterResult.images?.medium || characterResult.images?.grid || characterResult.image || ''
-  } else {
-    // 作品搜索结果
-    const bgmResult = result as import('../types').BgmSearchResult | import('../types').VndbSearchResult
-    url = bgmResult.images?.large || bgmResult.images?.medium || bgmResult.images?.grid || bgmResult.images?.small || ''
-  }
-  
-  // 如果 URL 为空或者是无效的 URL，返回占位图
+  const bgmResult = result as import('../types').BgmSearchResult
+  const url = bgmResult.images?.large || bgmResult.images?.medium || bgmResult.images?.grid || bgmResult.images?.small || ''
   if (!url || url.trim() === '') {
     return 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjAwIiBoZWlnaHQ9IjIwMCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cmVjdCB3aWR0aD0iMjAwIiBoZWlnaHQ9IjIwMCIgZmlsbD0iI2VlZSIvPjx0ZXh0IHg9IjUwJSIgeT0iNTAlIiBmb250LWZhbWlseT0iQXJpYWwiIGZvbnQtc2l6ZT0iMTQiIGZpbGw9IiM5OTkiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGR5PSIuM2VtIj7lm77niYfliqDovb3lpLHotKU8L3RleHQ+PC9zdmc+'
   }
@@ -475,13 +402,6 @@ function handleImageError(event: Event) {
           @click="apiSource = 'character'"
         >
           角色
-        </button>
-        <button
-          class="api-btn"
-          :class="{ active: apiSource === 'vndb' }"
-          @click="apiSource = 'vndb'"
-        >
-          VNDB
         </button>
         <button
           class="api-btn"
@@ -569,7 +489,6 @@ function handleImageError(event: Event) {
             v-for="result in results"
             :key="result.id"
             class="result-item"
-            :class="{ 'character-result': apiSource === 'character' }"
             @click="handleSelect(result)"
           >
             <img
@@ -582,7 +501,7 @@ function handleImageError(event: Event) {
             />
             <div class="result-info">
               <div class="result-name">
-                {{ apiSource === 'character' ? ((result as BgmCharacterSearchResult).nameCn || result.name) : (result.name_cn || result.name) }}
+                {{ (result as any).name_cn || result.name }}
               </div>
               <div v-if="getResultMeta(result)" class="result-date">{{ getResultMeta(result) }}</div>
             </div>
@@ -784,12 +703,6 @@ function handleImageError(event: Event) {
   height: 160px;
   object-fit: cover;
   display: block;
-}
-
-/* 角色搜索结果使用 contain 模式，避免裁剪导致模糊 */
-.result-item.character-result .result-image {
-  object-fit: contain;
-  background-color: #f5f5f5;
 }
 
 .result-info {

@@ -7,7 +7,7 @@ import SearchModal from './components/SearchModal.vue'
 import ConfigModal from './components/ConfigModal.vue'
 import EditItemModal from './components/EditItemModal.vue'
 import { getItemUrl } from './utils/url'
-import type { Tier, AnimeItem, TierConfig } from './types'
+import type { Tier, AnimeItem, TierConfig, CropPosition } from './types'
 import { loadTierData, saveTierData, loadTierConfigs, saveTierConfigs, loadTitle, saveTitle, loadTitleFontSize, saveTitleFontSize, exportAllData, importAllData, clearItemsAndTitle, resetSettings, loadThemePreference, loadHideItemNames, loadExportScale, DEFAULT_TIER_CONFIGS, type ExportData } from './utils/storage'
 
 const tiers = ref<Tier[]>([])
@@ -297,20 +297,24 @@ function handleEditItem(tierId: string, rowId: string, item: AnimeItem, index: n
 }
 
 function handleSaveEditItem(updatedItem: AnimeItem) {
+  console.log('💾 handleSaveEditItem 被调用:', {
+    itemId: updatedItem.id,
+    cropPosition: updatedItem.cropPosition,
+    cropPositionType: typeof updatedItem.cropPosition,
+    isObject: typeof updatedItem.cropPosition === 'object' && updatedItem.cropPosition !== null
+  })
+  
   if (currentTierId.value && currentRowId.value && currentIndex.value !== null) {
     const tier = tiers.value.find(t => t.id === currentTierId.value)
     if (tier) {
       const row = tier.rows.find(r => r.id === currentRowId.value)
       if (row) {
         row.items[currentIndex.value] = updatedItem
-        // 保存后，等待 DOM 更新，然后重新应用裁剪位置
-        nextTick(() => {
-          const imgElement = document.querySelector(`img[data-item-id="${updatedItem.id}"]`) as HTMLImageElement
-          if (imgElement && imgElement.complete && imgElement.naturalWidth > 0) {
-            // 图片已加载，手动应用裁剪位置
-            applySmartCropToImage(imgElement)
-          }
+        console.log('✅ 保存到tiers:', {
+          itemId: updatedItem.id,
+          savedCropPosition: row.items[currentIndex.value].cropPosition
         })
+        saveTierData(tiers.value)
       }
     }
   }
@@ -761,35 +765,95 @@ async function handleExportImage() {
         
         allImages.forEach((img) => {
           const processPromise = new Promise<void>(async (resolve) => {
-            const originalSrc = img.getAttribute('data-original-src') || img.getAttribute('src')
+            const itemId = img.getAttribute('data-item-id')
+            const currentSrc = img.src
+            const dataOriginalSrc = img.getAttribute('data-original-src')
+            
+            // ✅ 关键修复：如果 currentSrc 已经是 data URL（主页面已裁剪），直接使用
+            if (currentSrc.startsWith('data:')) {
+              console.log('✅ 导出图片时使用主页面已裁剪的 data URL:', { itemId })
+              img.src = currentSrc
+              img.style.width = '100px'
+              img.style.height = '133px'
+              img.style.objectFit = 'none'
+              resolve()
+              return
+            }
+            
+            const originalSrc = dataOriginalSrc || currentSrc
+            const isVndb = originalSrc?.includes('vndb') || itemId?.startsWith('v')
+            
+            console.log('🖼️ 导出图片时处理:', {
+              itemId,
+              originalSrc,
+              currentSrc,
+              hasDataOriginalSrc: !!dataOriginalSrc,
+              isVndb,
+              isDataUrl: originalSrc?.startsWith('data:'),
+              isAlreadyProxy: originalSrc?.includes('wsrv.nl')
+            })
             
             // 替换为CORS代理URL
             if (originalSrc && !originalSrc.startsWith('data:') && !originalSrc.includes('wsrv.nl')) {
               const proxyUrl = getCorsProxyUrl(originalSrc)
+              const isVndbImage = originalSrc.includes('vndb.org')
+              
+              console.log('🔗 导出图片时使用 CORS 代理:', {
+                original: originalSrc,
+                proxy: proxyUrl,
+                itemId,
+                isVndbImage,
+                isDirectUrl: proxyUrl === originalSrc
+              })
+              
               img.src = proxyUrl
+              // VNDB 图片直接使用原图，不设置 crossOrigin（让 html2canvas 处理）
+              // 其他图片使用代理，设置 crossOrigin
+              if (!isVndbImage || proxyUrl !== originalSrc) {
+                img.crossOrigin = 'anonymous'
+              }
+            } else if (originalSrc?.includes('wsrv.nl')) {
               img.crossOrigin = 'anonymous'
+              console.log('✅ 图片已经是代理 URL，设置 crossOrigin:', { originalSrc, itemId })
+            } else {
+              console.warn('⚠️ 导出图片时 URL 异常:', { originalSrc, currentSrc: img.src, itemId })
             }
             
             // 等待图片加载完成
             const waitForLoad = () => {
               if (img.complete && img.naturalWidth > 0 && img.naturalHeight > 0) {
+                console.log('✅ 导出图片时加载完成，开始裁剪:', {
+                  itemId,
+                  naturalWidth: img.naturalWidth,
+                  naturalHeight: img.naturalHeight,
+                  currentSrc: img.src
+                })
                 // 图片已加载，进行裁剪（传入导出缩放比例）
                 cropImageWithCanvas(img, currentScale).then((croppedBase64) => {
                   if (croppedBase64) {
+                    console.log('✅ 导出图片时裁剪成功:', { itemId, dataUrlLength: croppedBase64.length })
                     img.src = croppedBase64
                     img.style.width = '100px'
                     img.style.height = '133px'
                     img.style.objectFit = 'none' // 不再需要object-fit
                   } else {
+                    console.warn('⚠️ 导出图片时裁剪失败，使用 CSS 方式:', { itemId })
                     // 如果裁剪失败，使用CSS方式
                     applySmartCropToImage(img)
                   }
+                  resolve()
+                }).catch((error) => {
+                  console.error('❌ 导出图片时裁剪出错:', { itemId, error })
+                  applySmartCropToImage(img)
                   resolve()
                 })
               } else {
                 // 图片未加载完成，等待加载
                 img.onload = waitForLoad
-                img.onerror = () => resolve()
+                img.onerror = () => {
+                  console.error('❌ 导出图片时加载失败:', { itemId, src: img.src, originalSrc })
+                  resolve()
+                }
               }
             }
             
@@ -998,35 +1062,94 @@ async function handleExportPDF() {
         
         allImages.forEach((img) => {
           const processPromise = new Promise<void>(async (resolve) => {
-            const originalSrc = img.getAttribute('data-original-src') || img.getAttribute('src')
+            const itemId = img.getAttribute('data-item-id')
+            const currentSrc = img.src
+            const dataOriginalSrc = img.getAttribute('data-original-src')
+            
+            // ✅ 关键修复：如果 currentSrc 已经是 data URL（主页面已裁剪），直接使用
+            if (currentSrc.startsWith('data:')) {
+              console.log('✅ 导出 PDF 时使用主页面已裁剪的 data URL:', { itemId })
+              img.src = currentSrc
+              img.style.width = '100px'
+              img.style.height = '133px'
+              img.style.objectFit = 'none'
+              resolve()
+              return
+            }
+            
+            const originalSrc = dataOriginalSrc || currentSrc
+            
+            console.log('🖼️ 导出 PDF 时处理:', {
+              itemId,
+              originalSrc,
+              currentSrc,
+              hasDataOriginalSrc: !!dataOriginalSrc,
+              isVndb: originalSrc?.includes('vndb') || itemId?.startsWith('v'),
+              isDataUrl: originalSrc?.startsWith('data:'),
+              isAlreadyProxy: originalSrc?.includes('wsrv.nl')
+            })
             
             // 替换为CORS代理URL
             if (originalSrc && !originalSrc.startsWith('data:') && !originalSrc.includes('wsrv.nl')) {
               const proxyUrl = getCorsProxyUrl(originalSrc)
+              const isVndbImage = originalSrc.includes('vndb.org')
+              
+              console.log('🔗 导出 PDF 时使用 CORS 代理:', {
+                original: originalSrc,
+                proxy: proxyUrl,
+                itemId,
+                isVndbImage,
+                isDirectUrl: proxyUrl === originalSrc
+              })
+              
               img.src = proxyUrl
+              // VNDB 图片直接使用原图，不设置 crossOrigin（让 html2canvas 处理）
+              // 其他图片使用代理，设置 crossOrigin
+              if (!isVndbImage || proxyUrl !== originalSrc) {
+                img.crossOrigin = 'anonymous'
+              }
+            } else if (originalSrc?.includes('wsrv.nl')) {
               img.crossOrigin = 'anonymous'
+              console.log('✅ 图片已经是代理 URL，设置 crossOrigin:', { originalSrc, itemId })
+            } else {
+              console.warn('⚠️ 导出 PDF 时 URL 异常:', { originalSrc, currentSrc: img.src, itemId })
             }
             
             // 等待图片加载完成
             const waitForLoad = () => {
               if (img.complete && img.naturalWidth > 0 && img.naturalHeight > 0) {
+                console.log('✅ 导出 PDF 时加载完成，开始裁剪:', {
+                  itemId,
+                  naturalWidth: img.naturalWidth,
+                  naturalHeight: img.naturalHeight,
+                  currentSrc: img.src
+                })
                 // 图片已加载，进行裁剪（传入导出缩放比例）
                 cropImageWithCanvas(img, currentScale).then((croppedBase64) => {
                   if (croppedBase64) {
+                    console.log('✅ 导出 PDF 时裁剪成功:', { itemId, dataUrlLength: croppedBase64.length })
                     img.src = croppedBase64
                     img.style.width = '100px'
                     img.style.height = '133px'
                     img.style.objectFit = 'none' // 不再需要object-fit
                   } else {
+                    console.warn('⚠️ 导出 PDF 时裁剪失败，使用 CSS 方式:', { itemId })
                     // 如果裁剪失败，使用CSS方式
                     applySmartCropToImage(img)
                   }
+                  resolve()
+                }).catch((error) => {
+                  console.error('❌ 导出 PDF 时裁剪出错:', { itemId, error })
+                  applySmartCropToImage(img)
                   resolve()
                 })
               } else {
                 // 图片未加载完成，等待加载
                 img.onload = waitForLoad
-                img.onerror = () => resolve()
+                img.onerror = () => {
+                  console.error('❌ 导出 PDF 时加载失败:', { itemId, src: img.src, originalSrc })
+                  resolve()
+                }
               }
             }
             
@@ -1149,6 +1272,15 @@ function getCorsProxyUrl(url: string): string {
   // 如果已经是 wsrv，直接返回
   if (url.includes('wsrv.nl')) return url
   
+  // VNDB 图片可能不支持 wsrv.nl 代理，尝试直接使用原图（如果支持 CORS）
+  // 或者使用其他代理服务
+  if (url.includes('vndb.org') || url.includes('t.vndb.org')) {
+    // 尝试直接使用原图（VNDB 可能支持 CORS）
+    // 如果不行，可以尝试其他代理服务，如 images.weserv.nl 或其他
+    console.log('🔍 VNDB 图片，尝试直接使用原图:', url)
+    return url // 先尝试直接使用，如果失败会在加载时处理
+  }
+  
   // 关键优化：移除 t=... 时间戳，允许浏览器缓存图片
   // output=png 保证透明度和兼容性
   return `https://wsrv.nl/?url=${encodeURIComponent(url)}&output=png`
@@ -1157,19 +1289,18 @@ function getCorsProxyUrl(url: string): string {
 // 核心逻辑：根据 3:4 (0.75) 比例智能调整裁剪位置
 // s > 0.75 (宽图/标准图): 居中 (center center)
 // s < 0.75 (长图): 保留顶部 (center top)
-// 统一处理所有图片（包括角色和bangumi），使用相同的裁剪规则
+// 统一处理所有图片，使用相同的裁剪规则
 function applySmartCropToImage(img: HTMLImageElement) {
   // 必须有宽高才能计算，如果没有加载完则忽略
   if (img.naturalWidth && img.naturalHeight) {
     // 获取对应的 item 信息
     const itemId = img.getAttribute('data-item-id')
-    let cropPosition: string | undefined = 'auto'
+    let cropPosition: CropPosition = 'auto'
     
     if (itemId) {
-      // 从 tiers 中查找对应的 item
       for (const tier of tiers.value) {
         for (const row of tier.rows) {
-          const item = row.items.find(i => String(i.id) === itemId)
+          const item = row.items.find(i => String(i.id) === String(itemId))
           if (item && item.cropPosition) {
             cropPosition = item.cropPosition
             break
@@ -1196,14 +1327,17 @@ function applySmartCropToImage(img: HTMLImageElement) {
         img.style.objectPosition = 'center center'
       }
     } else {
-      // 使用保存的自定义裁剪位置
-      img.style.objectPosition = cropPosition
+      // 使用保存的自定义裁剪位置（只对字符串类型的预设位置设置 objectPosition）
+      if (typeof cropPosition === 'string') {
+        img.style.objectPosition = cropPosition
+      }
+      // 自定义坐标对象不需要设置 objectPosition，会在裁剪时使用
     }
   }
 }
 
 // 使用canvas手动裁剪图片（用于导出，确保html2canvas正确渲染）
-// 统一处理所有图片（包括角色和bangumi），使用相同的裁剪规则
+// 统一处理所有图片，使用相同的裁剪规则
 async function cropImageWithCanvas(img: HTMLImageElement, scale: number = 1): Promise<string | null> {
   // 必须有宽高才能计算
   if (!img.naturalWidth || !img.naturalHeight) {
@@ -1212,19 +1346,34 @@ async function cropImageWithCanvas(img: HTMLImageElement, scale: number = 1): Pr
   
   // 获取对应的 item 信息
   const itemId = img.getAttribute('data-item-id')
-  let cropPosition: string | undefined = 'auto'
+  let cropPosition: CropPosition = 'auto'
   
   if (itemId) {
-    // 从 tiers 中查找对应的 item
     for (const tier of tiers.value) {
       for (const row of tier.rows) {
-        const item = row.items.find(i => String(i.id) === itemId)
+        const item = row.items.find(i => String(i.id) === String(itemId))
         if (item && item.cropPosition) {
           cropPosition = item.cropPosition
+          console.log('🎨 导出时找到裁剪位置:', {
+            itemId,
+            itemName: item.name,
+            cropPosition,
+            isCustomPosition: typeof cropPosition === 'object' && cropPosition !== null && 'sourceX' in cropPosition
+          })
           break
         }
       }
       if (cropPosition !== 'auto') break
+    }
+    
+    // 如果没找到，输出调试信息
+    if (cropPosition === 'auto') {
+      console.warn('⚠️ 导出时未找到 item 的裁剪位置:', {
+        itemId,
+        allItemIds: tiers.value.flatMap(tier => 
+          tier.rows.flatMap(row => row.items.map(i => String(i.id)))
+        )
+      })
     }
   }
   
@@ -1243,7 +1392,13 @@ async function cropImageWithCanvas(img: HTMLImageElement, scale: number = 1): Pr
   let sourceWidth = naturalWidth
   let sourceHeight = naturalHeight
   
-  if (naturalAspectRatio > targetAspectRatio) {
+  // ✅ 如果裁剪位置是自定义坐标对象，直接使用
+  if (typeof cropPosition === 'object' && cropPosition !== null && 'sourceX' in cropPosition) {
+    sourceX = cropPosition.sourceX
+    sourceY = cropPosition.sourceY
+    sourceWidth = cropPosition.sourceWidth
+    sourceHeight = cropPosition.sourceHeight
+  } else if (naturalAspectRatio > targetAspectRatio) {
     // s > 0.75：图片较宽
     // 需要从原图中裁剪出对应100px的部分
     const scaleByHeight = containerHeight / naturalHeight

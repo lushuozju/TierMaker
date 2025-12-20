@@ -215,17 +215,148 @@ function handleItemDelete(index: number, e: Event) {
 function handleImageLoad(event: Event) {
   const img = event.target as HTMLImageElement
   
-  // 获取对应的 item 信息
   const itemId = img.getAttribute('data-item-id')
-  const item = itemId ? props.row.items.find(i => String(i.id) === itemId) : null
+  const item = itemId ? props.row.items.find(i => String(i.id) === String(itemId)) : null
   const cropPosition = item?.cropPosition || 'auto'
   
-  // 统一处理所有图片（包括角色和bangumi），使用相同的裁剪规则
+  console.log('🖼️ handleImageLoad 被调用:', {
+    itemId,
+    itemName: item?.name,
+    cropPosition,
+    isCustomPosition: typeof cropPosition === 'object' && cropPosition !== null && 'sourceX' in cropPosition,
+    imgSrc: img.src,
+    naturalWidth: img.naturalWidth,
+    naturalHeight: img.naturalHeight,
+    allItemIds: props.row.items.map(i => String(i.id))
+  })
+  
+  // 统一处理所有图片，使用相同的裁剪规则
   // 目标宽高比 target = 0.75 (3:4)，容器尺寸 100px × 133px
   const targetAspectRatio = 0.75 // 3/4
   const containerWidth = 100
   const containerHeight = 133
   const naturalAspectRatio = img.naturalWidth / img.naturalHeight
+  
+  // ✅ 如果已经是裁剪后的 dataURL，就不要再裁一次（避免二次 load 循环）
+  if (img.dataset.cropped === '1') {
+    console.log('✅ 图片已裁剪，跳过处理')
+    return
+  }
+  
+  // ✅ 如果裁剪位置是自定义坐标对象，使用 canvas 裁剪
+  if (typeof cropPosition === 'object' && cropPosition !== null && 'sourceX' in cropPosition) {
+    console.log('✅ 检测到自定义坐标，开始裁剪:', {
+      itemId,
+      cropPosition,
+      currentSrc: img.src
+    })
+    
+    // ✅ 永远用原始 src 来裁剪（不要用 img.src，因为 img.src 会被改成 dataURL）
+    const originalSrc = img.getAttribute('data-original-src') || img.currentSrc || img.src
+    
+    console.log('✅ 使用原始图片地址裁剪:', originalSrc)
+    
+    // 使用 canvas 裁剪图片（需要重新加载图片以设置 crossOrigin）
+    cropImageWithCanvasForDisplay(originalSrc, cropPosition).then((dataUrl) => {
+      if (!dataUrl) return
+      
+      console.log('✅ 裁剪成功，更新图片 src')
+      img.dataset.cropped = '1' // ✅ 打标记，防止二次裁剪
+      img.src = dataUrl // ✅ 替换为裁剪后的图
+      // 确保图片尺寸正确
+      img.style.width = `${containerWidth}px`
+      img.style.height = `${containerHeight}px`
+      img.style.objectFit = 'none' // 使用 none 模式，因为已经是裁剪后的图片
+    }).catch((error) => {
+      console.error('❌ 裁剪图片失败（可能是 CORS 问题）:', {
+        error,
+        imageSrc: originalSrc,
+        itemId,
+        itemName: item?.name
+      })
+      
+      // 如果裁剪失败，使用 object-position 回退方案
+      // ⚠️ 注意：这不是精确的，导出时可能仍会有偏差
+      img.style.objectFit = 'cover'
+      img.style.width = `${containerWidth}px`
+      img.style.height = `${containerHeight}px`
+      
+      // 根据自定义坐标计算 object-position（使用正确的 maxX/maxY 映射）
+      const { sourceX, sourceY, sourceWidth, sourceHeight } = cropPosition
+      const naturalWidth = img.naturalWidth
+      const naturalHeight = img.naturalHeight
+      
+      if (naturalWidth && naturalHeight) {
+        // ✅ 修复：使用可移动范围计算百分比，避免"向中心偏移"
+        // object-fit: cover 时，图片会被缩放，我们需要计算在缩放后的图片中，裁剪区域的位置
+        const targetAspectRatio = containerWidth / containerHeight // 0.75
+        
+        // 计算图片在 cover 模式下的实际显示尺寸
+        let displayedWidth = naturalWidth
+        let displayedHeight = naturalHeight
+        let offsetX = 0
+        let offsetY = 0
+        
+        if (naturalWidth / naturalHeight > targetAspectRatio) {
+          // 图片较宽，高度填满，宽度超出
+          displayedHeight = containerHeight
+          displayedWidth = naturalWidth * (containerHeight / naturalHeight)
+          offsetX = (displayedWidth - containerWidth) / 2
+        } else {
+          // 图片较高，宽度填满，高度超出
+          displayedWidth = containerWidth
+          displayedHeight = naturalHeight * (containerWidth / naturalWidth)
+          offsetY = (displayedHeight - containerHeight) / 2
+        }
+        
+        // 计算裁剪区域在缩放后图片中的位置
+        const scaleX = displayedWidth / naturalWidth
+        const scaleY = displayedHeight / naturalHeight
+        const scaledSourceX = sourceX * scaleX
+        const scaledSourceY = sourceY * scaleY
+        const scaledSourceWidth = sourceWidth * scaleX
+        const scaledSourceHeight = sourceHeight * scaleY
+        
+        // 计算裁剪区域中心点相对于缩放后图片的位置
+        const cropCenterX = scaledSourceX + scaledSourceWidth / 2
+        const cropCenterY = scaledSourceY + scaledSourceHeight / 2
+        
+        // 计算可移动范围
+        const maxX = Math.max(0, displayedWidth - containerWidth)
+        const maxY = Math.max(0, displayedHeight - containerHeight)
+        
+        // 计算百分比（相对于可移动范围）
+        const xPercent = maxX === 0 ? 50 : ((cropCenterX - containerWidth / 2) / maxX) * 100
+        const yPercent = maxY === 0 ? 50 : ((cropCenterY - containerHeight / 2) / maxY) * 100
+        
+        // 限制在 0-100% 范围内
+        const clampedXPercent = Math.max(0, Math.min(100, xPercent))
+        const clampedYPercent = Math.max(0, Math.min(100, yPercent))
+        
+        img.style.objectPosition = `${clampedXPercent}% ${clampedYPercent}%`
+        
+        console.warn('⚠️ 使用 object-position 回退方案（不精确，导出可能仍有偏差）:', { 
+          xPercent: clampedXPercent, 
+          yPercent: clampedYPercent,
+          originalXPercent: xPercent,
+          originalYPercent: yPercent,
+          cropCenterX,
+          cropCenterY,
+          displayedWidth,
+          displayedHeight,
+          maxX,
+          maxY,
+          naturalWidth,
+          naturalHeight,
+          sourceX,
+          sourceY,
+          sourceWidth,
+          sourceHeight
+        })
+      }
+    })
+    return
+  }
   
   // 统一使用 cover 模式
   img.style.objectFit = 'cover'
@@ -242,10 +373,96 @@ function handleImageLoad(event: Event) {
       // s < 0.75：图片较高，保留顶部
       img.style.objectPosition = 'center top'
     }
-  } else {
-    // 使用保存的自定义裁剪位置
+  } else if (typeof cropPosition === 'string') {
+    // 使用保存的预设裁剪位置
     img.style.objectPosition = cropPosition
   }
+}
+
+function getCorsProxyUrl(url: string): string {
+  if (!url) return ''
+  if (url.includes('wsrv.nl')) return url
+  if (url.includes('vndb.org') || url.includes('t.vndb.org')) {
+    return url
+  }
+  return `https://wsrv.nl/?url=${encodeURIComponent(url)}&output=png`
+}
+
+// 使用 canvas 裁剪图片用于显示（自定义坐标）
+async function cropImageWithCanvasForDisplay(
+  imageSrc: string,
+  cropPosition: { sourceX: number; sourceY: number; sourceWidth: number; sourceHeight: number }
+): Promise<string | null> {
+  const { sourceX, sourceY, sourceWidth, sourceHeight } = cropPosition
+  const containerWidth = 100
+  const containerHeight = 133
+  
+  console.log('🎨 开始裁剪图片:', {
+    imageSrc,
+    cropPosition: { sourceX, sourceY, sourceWidth, sourceHeight },
+    targetSize: { containerWidth, containerHeight }
+  })
+  
+  return new Promise((resolve, reject) => {
+    // 创建新的 Image 对象，设置 crossOrigin 以避免 CORS 问题
+    const img = new Image()
+    img.crossOrigin = 'anonymous'
+    
+    // ✅ 使用 CORS 代理 URL 来解决跨域问题
+    const proxyUrl = getCorsProxyUrl(imageSrc)
+    console.log('🔗 使用 CORS 代理:', { original: imageSrc, proxy: proxyUrl })
+    
+    img.onload = () => {
+      console.log('✅ 图片加载成功，开始裁剪:', {
+        naturalWidth: img.naturalWidth,
+        naturalHeight: img.naturalHeight,
+        cropArea: { sourceX, sourceY, sourceWidth, sourceHeight },
+        proxyUrl,
+        originalUrl: imageSrc
+      })
+      
+      try {
+        const canvas = document.createElement('canvas')
+        canvas.width = containerWidth
+        canvas.height = containerHeight
+        const ctx = canvas.getContext('2d')
+        
+        if (!ctx) {
+          reject(new Error('无法获取 canvas context'))
+          return
+        }
+        
+        ctx.imageSmoothingEnabled = true
+        ctx.imageSmoothingQuality = 'high'
+        
+        ctx.drawImage(
+          img,
+          Math.round(sourceX), Math.round(sourceY), Math.round(sourceWidth), Math.round(sourceHeight),
+          0, 0, containerWidth, containerHeight
+        )
+        
+        // 返回裁剪后的base64
+        const dataUrl = canvas.toDataURL('image/png', 1.0)
+        console.log('✅ 裁剪完成，生成 data URL，长度:', dataUrl.length)
+        resolve(dataUrl)
+      } catch (error) {
+        console.error('❌ 裁剪过程中出错:', error)
+        reject(error)
+      }
+    }
+    
+    img.onerror = (error) => {
+      console.error('❌ 图片加载失败（可能是 CORS 或网络问题）:', {
+        error,
+        originalUrl: imageSrc,
+        proxyUrl
+      })
+      reject(new Error('图片加载失败'))
+    }
+    
+    // 加载图片（使用 CORS 代理 URL）
+    img.src = proxyUrl
+  })
 }
 
 // 处理图片加载错误
@@ -453,7 +670,7 @@ function getLongPressProgress(index: number): number {
         class="item-image-container"
       >
         <img
-          :key="`img-${item.id}-${item.cropPosition || 'auto'}`"
+          :key="`img-${item.id}-${JSON.stringify(item.cropPosition || 'auto')}`"
           :src="item.image"
           :data-original-src="item.image"
           :data-item-id="item.id || ''"
