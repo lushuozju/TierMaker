@@ -322,3 +322,142 @@ export async function searchBangumiCharacters(
   }
 }
 
+/**
+ * 根据 subject ID 获取所有角色
+ * API 端点: GET /v0/subjects/{subject_id}/characters
+ */
+export async function getCharactersBySubjectId(
+  subjectId: number
+): Promise<BgmCharacterSearchResult[]> {
+  try {
+    const url = `${BANGUMI_API_BASE}/v0/subjects/${subjectId}/characters`
+
+    const response = await fetchWithTimeout(
+      url,
+      {
+        method: 'GET',
+        headers: getRequestHeaders(false), // GET 请求不需要 Content-Type
+      },
+      10000 // 10 秒超时
+    )
+
+    if (!response.ok) {
+      let errorMessage = `请求失败: ${response.status} ${response.statusText}`
+      try {
+        const errorBody = await response.text()
+        console.error('Bangumi API 错误响应:', errorBody)
+        if (errorBody) {
+          try {
+            const errorJson = JSON.parse(errorBody)
+            errorMessage = errorJson.error?.message || errorJson.message || errorMessage
+          } catch {
+            errorMessage = `${errorMessage}\n响应内容: ${errorBody.substring(0, 200)}`
+          }
+        }
+      } catch (e) {
+        // 忽略读取错误响应体的错误
+      }
+
+      if (response.status === 401) {
+        throw new BangumiError('API 认证失败，请检查 Access Token 配置')
+      }
+      throw new BangumiError(errorMessage)
+    }
+
+    // API 返回的是数组格式，每个元素是角色对象，直接包含 id, name, images 等字段
+    const responseData = await response.json()
+    
+    // 添加调试日志查看实际返回的数据结构
+    console.log('API 返回的原始数据:', responseData)
+    if (Array.isArray(responseData) && responseData.length > 0) {
+      console.log('第一个角色的数据结构:', responseData[0])
+      console.log('第一个角色的 ID:', responseData[0].id)
+      console.log('第一个角色的 name:', responseData[0].name)
+      console.log('第一个角色的 images:', responseData[0].images)
+    }
+    
+    let characters: any[] = []
+    
+    // 处理不同的返回格式
+    if (Array.isArray(responseData)) {
+      characters = responseData
+    } else if (responseData.data && Array.isArray(responseData.data)) {
+      characters = responseData.data
+    } else {
+      console.warn('角色 API 返回格式不正确，期望数组:', responseData)
+      return []
+    }
+    
+    console.log(`解析到 ${characters.length} 个角色`)
+
+    // 转换数据格式
+    // API 返回的每个元素直接就是角色对象，包含 id, name, images, relation 等字段
+    const result = characters
+      .map((char: any) => {
+        // API 返回的角色对象直接包含所有字段，不需要通过 character 字段访问
+        // 处理图片URL - images 对象直接包含 large, medium, small, grid 字段
+        const images = char.images || {}
+        const imageUrl = images.large || images.medium || images.grid || images.small || ''
+        
+        // 如果 images 对象存在但所有字段都为空字符串，则设为 null
+        const hasValidImage = imageUrl && imageUrl.trim() !== ''
+        const finalImageUrl = hasValidImage ? imageUrl : null
+
+        // 注意：API 返回的角色对象可能不包含 infobox 和 stat 字段
+        // 这些字段需要在单独调用 /v0/characters/{id} 时才会返回
+        const convertedChar = {
+          id: char.id,
+          name: char.name, // 直接使用 name 字段
+          nameCn: undefined, // API 返回的数据中没有中文名，需要单独获取
+          name_cn: undefined, // 兼容性字段
+          nameEn: undefined,
+          // 优先使用 large，然后是 medium，最后是 grid
+          image: finalImageUrl,
+          gender: '?', // API 返回的数据中没有 gender 字段
+          popularity: 0, // API 返回的数据中没有 stat 字段
+          images: {
+            grid: images.grid || undefined,
+            medium: images.medium || undefined,
+            large: images.large || undefined,
+            small: images.small || undefined,
+          }
+        } as BgmCharacterSearchResult
+        
+        console.log(`转换角色 ${convertedChar.id}:`, {
+          name: convertedChar.name,
+          image: convertedChar.image,
+          hasImage: hasValidImage
+        })
+        
+        return convertedChar
+      })
+      .filter((char: any) => char && char.id) // 过滤掉无效的角色
+
+    console.log(`转换后得到 ${result.length} 个有效角色`)
+    return result
+  } catch (error: any) {
+    console.error('获取角色列表错误:', error)
+    
+    if (error instanceof BangumiError) {
+      throw error
+    }
+    
+    // 检查是否是网络错误
+    if (error.message && (
+      error.message.includes('fetch') || 
+      error.message.includes('network') || 
+      error.message.includes('Failed to fetch') ||
+      error.message.includes('CORS') ||
+      error.name === 'TypeError'
+    )) {
+      throw new BangumiError('网络连接失败，可能是 CORS 问题。请检查网络连接或稍后重试')
+    }
+    
+    // 检查是否是超时错误
+    if (error.name === 'AbortError' || error.message.includes('超时')) {
+      throw new BangumiError('请求超时，请检查网络连接')
+    }
+    
+    throw new BangumiError(`网络错误: ${error.message || '未知错误'}`)
+  }
+}

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, watch, onMounted } from 'vue'
-import { searchBangumiAnime, searchBangumiCharacters } from '../utils/bangumi'
+import { searchBangumiAnime, searchBangumiCharacters, getCharactersBySubjectId } from '../utils/bangumi'
 import { generateDefaultUrl } from '../utils/url'
 import { saveLastSearchSource, loadLastSearchSource } from '../utils/storage'
 import type { AnimeItem, ApiSource, SearchResult } from '../types'
@@ -8,6 +8,7 @@ import type { AnimeItem, ApiSource, SearchResult } from '../types'
 const emit = defineEmits<{
   close: []
   select: [anime: AnimeItem]
+  'select-multiple': [animes: AnimeItem[]]
 }>()
 
 const apiSource = ref<ApiSource>('bangumi')
@@ -26,6 +27,9 @@ const showLocalUpload = ref(false)
 const uploadedImage = ref<string | null>(null)
 const customTitle = ref('')
 const fileInputRef = ref<HTMLInputElement | null>(null)
+
+// 批量导入角色相关状态
+const importingCharacters = ref<number | null>(null) // 正在导入的 subject ID
 
 // 防抖搜索
 let searchTimeout: ReturnType<typeof setTimeout> | null = null
@@ -136,6 +140,79 @@ function handleSelect(result: SearchResult) {
   }
   
   emit('select', anime)
+}
+
+// 批量导入角色
+async function handleImportCharacters(subjectId: number, event: Event) {
+  event.stopPropagation() // 防止触发 handleSelect
+  
+  if (importingCharacters.value === subjectId) {
+    return // 正在导入中，防止重复点击
+  }
+  
+  importingCharacters.value = subjectId
+  error.value = ''
+  
+  try {
+    // 获取角色列表
+    const characters = await getCharactersBySubjectId(subjectId)
+    
+    if (characters.length === 0) {
+      error.value = '该作品暂无角色信息'
+      importingCharacters.value = null
+      return
+    }
+    
+    // 将角色转换为 AnimeItem 数组
+    console.log(`开始导入 ${characters.length} 个角色`)
+    const animeItems: AnimeItem[] = []
+    
+    for (const character of characters) {
+      // character.image 已经是从 getCharactersBySubjectId 转换好的图片URL
+      // 如果没有，则尝试从 images 对象中获取
+      const imageUrl = character.image || character.images?.large || character.images?.medium || character.images?.grid || character.images?.small || ''
+      
+      // 确保有有效的图片URL（不为空字符串）
+      const finalImageUrl = imageUrl && imageUrl.trim() !== '' ? imageUrl : ''
+      
+      const defaultUrl = generateDefaultUrl(character.id, true) // 角色
+      const itemId = `character_${character.id}`
+      
+      // 使用 character.name，因为API返回的数据中只有 name 字段
+      const characterName = character.name || '未知角色'
+      
+      console.log(`准备导入角色 ${itemId}:`, {
+        name: characterName,
+        imageUrl: finalImageUrl,
+        hasImage: !!finalImageUrl
+      })
+      
+      const anime: AnimeItem = {
+        id: itemId,
+        name: characterName,
+        name_cn: character.nameCn || character.name_cn || undefined,
+        image: finalImageUrl,
+        originalUrl: defaultUrl,
+        originalImage: finalImageUrl,
+      }
+      
+      animeItems.push(anime)
+    }
+    
+    // 批量导入所有角色
+    if (animeItems.length > 0) {
+      console.log(`批量导入 ${animeItems.length} 个角色`)
+      emit('select-multiple', animeItems)
+    }
+    
+    // 导入完成后显示成功消息
+    console.log(`成功导入 ${animeItems.length}/${characters.length} 个角色`)
+  } catch (e: any) {
+    console.error('导入角色失败:', e)
+    error.value = e.message || '导入角色失败'
+  } finally {
+    importingCharacters.value = null
+  }
 }
 
 function handleClose() {
@@ -507,6 +584,16 @@ function handleImageError(event: Event) {
               </div>
               <div v-if="getResultMeta(result)" class="result-date">{{ getResultMeta(result) }}</div>
             </div>
+            <!-- 仅在 bangumi 搜索结果中显示导入角色按钮 -->
+            <button
+              v-if="apiSource === 'bangumi' && typeof result.id === 'number'"
+              class="import-characters-btn"
+              :disabled="importingCharacters === result.id"
+              @click.stop="handleImportCharacters(result.id as number, $event)"
+              :title="importingCharacters === result.id ? '导入中...' : '导入所有角色'"
+            >
+              {{ importingCharacters === result.id ? '导入中...' : '导入角色' }}
+            </button>
           </div>
         </div>
         
@@ -693,6 +780,7 @@ function handleImageError(event: Event) {
   cursor: pointer;
   transition: all 0.2s;
   background: var(--bg-color);
+  position: relative;
 }
 
 .result-item:hover {
@@ -723,6 +811,34 @@ function handleImageError(event: Event) {
 .result-date {
   font-size: 10px;
   color: var(--text-secondary);
+}
+
+.import-characters-btn {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  padding: 4px 8px;
+  border: 2px solid var(--border-color);
+  background: var(--bg-color);
+  color: var(--text-color);
+  font-size: 10px;
+  font-weight: bold;
+  cursor: pointer;
+  transition: all 0.2s;
+  border-radius: 4px;
+  z-index: 10;
+  white-space: nowrap;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+}
+
+.import-characters-btn:hover:not(:disabled) {
+  background: var(--border-color);
+  color: var(--bg-color);
+}
+
+.import-characters-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
 .loading,
