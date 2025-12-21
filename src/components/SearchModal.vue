@@ -56,6 +56,7 @@ async function handleSearch() {
     
     if (apiSource.value === 'bangumi') {
       data = await searchBangumiAnime(keyword.value, 0, 20)
+      console.log('Bangumi 搜索结果数量:', data.length, data)
       if (data.length < 20) {
         hasMore.value = false
       }
@@ -67,6 +68,7 @@ async function handleSearch() {
     }
     
     results.value = data
+    console.log('设置的 results 数量:', results.value.length)
   } catch (e: any) {
     console.error('搜索错误:', e)
     error.value = e.message || '搜索失败'
@@ -486,8 +488,8 @@ function handleImageError(event: Event) {
         <div v-else-if="results.length === 0 && keyword" class="empty">未找到结果</div>
         <div v-else class="results-grid">
           <div
-            v-for="result in results"
-            :key="result.id"
+            v-for="(result, index) in results"
+            :key="`${apiSource}-${result.id}-${index}`"
             class="result-item"
             @click="handleSelect(result)"
           >

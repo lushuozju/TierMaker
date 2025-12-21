@@ -95,13 +95,14 @@ export async function searchBangumiAnime(
   }
 
   try {
-    const url = `${BANGUMI_API_BASE}/v0/search/subjects`
+    const url = `${BANGUMI_API_BASE}/v0/search/subjects?limit=${limit}&offset=${offset}`
     const requestBody = {
       keyword,
       filter: { type: [1,2,3,4,5] }, // 1书籍; 2动画; 3音乐;4游戏;6三次元
-      offset,
-      limit,
     }
+
+    console.log('Bangumi 搜索请求 URL:', url)
+    console.log('Bangumi 搜索请求参数:', { keyword, limit, offset })
 
     const headers = getRequestHeaders()
     
